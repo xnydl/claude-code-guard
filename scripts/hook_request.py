@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Claude hook: full egress check. Uses gate CHECK when available, else guard directly."""
+"""Legacy template Hook: gate CHECK only, with one bounded fail-closed deadline."""
 
 from __future__ import annotations
 
 import json
 import socket
-import subprocess
 import sys
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -15,50 +15,58 @@ if str(HERE) not in sys.path:
 
 from ccg_detect import load_state
 
+CHECK_TIMEOUT = 32.0  # Must remain below the configured 35-second hook timeout.
+
 
 def block(reason: str) -> int:
     print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
     return 0
 
 
-def check_via_gate(port: int) -> str | None:
+def check_via_gate(port: int) -> tuple[bool, str]:
+    deadline = time.monotonic() + CHECK_TIMEOUT
+
+    def remaining() -> float:
+        value = deadline - time.monotonic()
+        if value <= 0:
+            raise TimeoutError("control deadline")
+        return value
+
     try:
-        sock = socket.create_connection(("127.0.0.1", port), timeout=32)
-        sock.sendall(b"CHECK\n")
-        data = sock.recv(1024).decode("utf-8", "replace")
-        sock.close()
+        with socket.create_connection(("127.0.0.1", port), timeout=remaining()) as sock:
+            sock.settimeout(remaining())
+            sock.sendall(b"CHECK\n")
+            chunks = bytearray()
+            while b"\n" not in chunks and len(chunks) < 1024:
+                sock.settimeout(remaining())
+                chunk = sock.recv(1024 - len(chunks))
+                if not chunk:
+                    break
+                chunks.extend(chunk)
     except OSError:
-        return None
-    if data.strip() == "OK":
-        return "OK"
-    if data.startswith("BLOCK"):
-        return data.split("\t", 1)[-1].strip() or "blocked"
-    return "invalid"
+        return False, "network control unavailable or timed out; request blocked"
+    if b"\n" not in chunks:
+        return False, "incomplete network control response; request blocked"
+    data = bytes(chunks).decode("utf-8", "replace").strip()
+    if data == "OK":
+        return True, ""
+    if data == "BLOCK" or data.startswith("BLOCK\t"):
+        return False, data.partition("\t")[2].strip() or "network validation blocked"
+    return False, "invalid network control response; request blocked"
 
 
 def main() -> int:
-    state = load_state()
-    control = int(state.get("control_port") or 7900) if state else 7900
-    via_gate = check_via_gate(control)
-    if via_gate == "OK":
+    try:
+        state = load_state()
+        control = int(state["control_port"])
+        if not 1 <= control <= 65535:
+            raise ValueError("invalid port")
+    except (OSError, ValueError, KeyError, TypeError):
+        return block("missing or invalid guard state; request blocked")
+    allowed, reason = check_via_gate(control)
+    if allowed:
         return 0
-    if via_gate and via_gate != "invalid":
-        return block(via_gate)
-
-    guard = HERE / "ccg_guard.py"
-    result = subprocess.run(
-        [sys.executable, str(guard), "--check"],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        timeout=32,
-        check=False,
-    )
-    if result.returncode == 0:
-        return 0
-    reason = (result.stdout or "full network validation failed").strip().splitlines()
-    return block(reason[0] if reason else "full network validation failed")
+    return block(reason)
 
 
 if __name__ == "__main__":

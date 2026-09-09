@@ -1,99 +1,61 @@
 ---
 name: claude-code-guard
 description: >
-  给客户机器配置 Claude Code 防封：先探测对方电脑上实际在跑的梯子和系统（macOS / Windows），再让客户选定固定节点后才落地时区、本地代理绑定、Hook、指纹浏览器，并清理旧账号残留凭证与 machineID。
-  触发：Claude 防封、Claude Code 被封、秒封、台湾节点、Windows、Clash、v2rayN、Camoufox、指纹浏览器、清理凭证、chain key、machineID、/claude-code-guard。
+  配置、维护或排查 Claude Code 本地网络保护：核对现有 wrapper、Clash/Mihomo 专用入站、单一固定最终出口节点、链式代理、动态住宅 IP、网络 Hook、macOS 沙箱与 Camoufox 登录浏览器。也用于明确授权的账号残留扫描或清理。用户提到 claude-code-guard、Claude 防封策略、代理断连阻断、节点漂移、网络 Hook 误拦截时使用；不能保证不封号、绝对不泄漏或不同账号无法关联。
 ---
 
-# Claude Code 防封配置
+# Claude Code 网络保护 Skill
 
-把 Claude Code 绑到**客户自己梯子上的一个固定出口**。梯子品牌、端口、控制口、操作系统都**先探测，禁止写死成作者这台 Mac / Clash Verge**。
+目标是可核验的路由约束、故障阻断与本地数据隔离，不是绕过服务条款或承诺账号安全。遵守服务适用地区与使用规则；不把节点名、住宅 IP 或第三方评分当作官方认可。
 
-**先让客户选定一个固定节点。** 没拿到完整叶子名之前，禁止改配置、装 Hook、开登录。
+## 先分清维护还是新装
 
-权威细节：
+1. **维护已有环境优先**：读 wrapper、Hook、沙箱、启动服务和浏览器入口。不能因为附带安装器就重新安装。
+2. 先读 [维护与本机基线](references/maintenance.md)。现用 ~/.local/claude-guard/ 与旧模板 ~/.claude-guard/ 是两套实现，不能互相覆盖。
+3. 用只读审计获取文件存在性、SHA-256 和有限设置：
 
-- 分层：`references/layers.md`
-- 客户端差异：`references/clients.md`
-- 指纹浏览器：`references/fingerprint.md`
-- 旧身份：`references/identity-purge.md`
+       python3 "<SKILL>/scripts/ccg_audit.py"
 
-脚本是跨平台 Python，在 `scripts/`。
+   审计不调用网络、不读 Cookie/聊天/钥匙串、不证明流量安全。要记录浏览器启动器摘要时显式传 --browser-launcher "<已确认的脚本路径>"。
+4. 记录变更前摘要和用户已有选择，再做最小修改。仅更新 Skill 时，只改 Skill 源码/使用副本，不改运行中脚本、代理、账号资料或系统设置。
+5. 已有明确选择且与配置匹配时直接沿用。新出口未获选择、清理范围不清、需要停用保护或中断会话时才询问。
 
-## 硬性门槛
+## 路由与节点规则
 
-1. 先探测并列出节点，然后**停住**。
-2. 必须等客户回复**一个固定叶子的完整名字**。推荐台湾，但不替他选、不默认第一项。
-3. 自动切换 / 负载均衡 / 策略组名一律不收。
-4. 列不出节点时：客户先在自己客户端里点好固定节点，再把那个名字发过来（仍要 `--node`，没有「跳过选节点」）。
-5. 换号 / 曾被封：先扫描身份，客户确认后再清。
+- Clash **规则模式**允许国内开发服务 DIRECT、Claude 走独立上游。TUN 开启不等于全部流量走代理；系统代理开关不能证明实际出口。
+- **只能指定一个最终出口节点**，按完整叶子名精确匹配。不得添加节点白名单、备用出口或自动轮换；配置仅保存单个 expected_node 字符串，不接受列表或从多个候选中默认选一个。支持单跳与链式代理；“单跳”不是 Clash DIRECT。
+- 从实际专用入站的 proxy 解析 Selector 的 now，再核对 dialer-proxy/入口依赖。允许 Selector 作为路由根，但最终出口必须等于唯一指定节点。循环、缺失、DIRECT/REJECT/PASS 或无法确定的链路不能当作已验证。
+- 🤖 AI服务 可指向台湾 Selector，但不必是 CLI 专用入口的路由根。不能只看 UI，也不能假定旧策略组 claude-guard-exit 存在。
+- 固定节点不等于固定公网 IP。同一指定节点的新 TW 动态 IP 可更新 CLI 会话；其他任何叶子均不应放行。换出口必须由用户明确重新指定，替换旧目标后重新校验/绑定，不能把它追加成备用节点。节点名、旗帜、显示延迟都不是地区证据。
+- 短时重试只能使用唯一指定节点，不能回退 DIRECT、系统代理或其他节点；地区明确不符立即拒绝。缓存和轮询有时间窗口，必须说明。
 
-## 流程
+分层、重试和验收读 [保护边界](references/layers.md)；浏览器读 [Camoufox](references/fingerprint.md)。
 
-### 1. 探测，不要假设
+## 本机已确认偏好
 
-```bash
-python3 "<SKILL>/scripts/ccg_detect.py"
-```
+以下不是其他客户的新装默认值：
 
-Windows 用 `py -3` 或 `python`。看 JSON 里的：
+- 保留规则分流、唯一指定最终出口、动态 IP 兼容和会话恢复。
+- 本机明确选择默认 --permission-mode bypassPermissions；显式参数优先。它放宽工具权限，不增强网络保护；新装不擅自开启。
+- **不要设置 CLAUDE_CODE_DISABLE_MOUSE**。鼠标转义码先排查 TTY/raw mode、退出清理及后台进程读写终端，不用禁用鼠标掩盖问题。
+- 用 Claude 进程 BROWSER 指向 claude-camoufox；不改 macOS 全局默认浏览器，不碰普通 Chrome 的任一 profile。
+- 不因更新 CLI/Skill 自动清凭证、聊天、Cookie 或重置指纹；读 [清理边界](references/identity-purge.md)。
 
-- `os`：`darwin` / `windows`
-- `family`：`clash-mihomo`（能列节点）或 `local-proxy`（只能绑端口）
-- `clients`：实际进程
-- `recommended_nodes`：名字像台湾/家宽的叶子
-- `bind_port` / `controller` / `notes`
+## 新环境或迁移
 
-```bash
-python3 "<SKILL>/scripts/ccg_detect.py" --list
-```
+先读 [客户端与旧模板](references/clients.md)。探测系统、真实客户端、代理/控制端口和已有部署，不复制作者节点/端口/路径：
 
-把清单发给客户，问：「选一个固定节点，回复完整名字。」**在这里停，不要往下装。**
+    python3 "<SKILL>/scripts/ccg_detect.py" --list
 
-### 2. 选节点（客户点名之后才继续）
+原始探测 JSON 可能含控制器 secret，不能原样发布。新环境只让用户确认一个完整叶子名，不提供添加白名单或备用节点的选项；Selector 可是路由根但不是最终身份。只能检测端口时不能声称已验证最终节点。
 
-- 台湾叶子：`expected_region=TW`，`TZ=Asia/Taipei`
-- 客户坚持其他地区：区域码跟出口 `loc` 一致，时区跟该 IP 的 GeoIP 一致，并说明风险更高
-- 名字必须和列表里的叶子一致（能列出时）
+附带 ccg_install.py、ccg_guard.py 等是旧通用模板，**不等同现用本机策略**。不要用其回滚已有部署；安装器会拒绝覆盖发现的保护文件/已有 Hook。新环境也先做能力差异审查、适配及隔离测试，再按授权部署。
 
-### 3. 旧身份
+## 验收与交付
 
-```bash
-python3 "<SKILL>/scripts/ccg_identity.py" scan
-```
-
-macOS 查钥匙串，Windows 查凭据管理器。有残留且客户确认换号/曾被封：
-
-```bash
-python3 "<SKILL>/scripts/ccg_identity.py" purge --yes
-```
-
-换号加 `--purge-browser`。先退出 Claude。
-
-### 4. 按探测结果安装
-
-```bash
-python3 "<SKILL>/scripts/ccg_install.py" --node "<客户回复的完整叶子名>" --region TW
-```
-
-没有 `--node` 会失败。安装写入 `~/.claude-guard/state.json`。
-
-### 5. 指纹浏览器
-
-代理必须是 state 里的 `upstream_port`，不是系统默认浏览器。见 `references/fingerprint.md`。
-
-### 6. 验收
-
-1. `python3 ~/.claude-guard/ccg_guard.py --fast`
-2. `python3 ~/.claude-guard/ccg_guard.py --status` 地区正确
-3. 清身份后 scan 不再报旧 oauth / 凭据
-4. 用 wrapper 启动（Windows：`wrapper.ps1`，无进程沙箱）
-5. 登录后再 `--status` 一次
-
-## 不要做
-
-- 把作者的 Hinet 名、`/tmp/verge/...`、7897 写进客户配置
-- 把自动选组当成固定节点
-- 未探测就按 Mac + Clash Verge 施工
-- 打印 token / machineID / 邮箱
-- 在 Windows 上假装有 Seatbelt
+- 语法/单测 → 比较文件 → 只读路由核对 → 无账号的独立拒绝路径测试。
+- 用户允许影响连接后才能切节点、关 TUN 或断网测试；不打断正在运行的任务。
+- 测试错误节点、错误地区、控制器失联、上游断开、IPv6/DNS、备用 loopback 代理及长连接；没测的写“未验证”。
+- --fast 不证明地区；Hook 存在不证明每条 HTTP 请求被检查；启动器路径不证明当前进程受沙箱限制。
+- 更新 CLI 只更新真实二进制，保留 wrapper/Hook/设置/服务。用前后摘要证明保护文件未改；没有前置摘要就不能宣称“哈希证明未改”。
+- 更新 Skill 后运行 scripts/test_skill.py 及 Skill Creator 的 quick_validate.py，比较源码与使用副本。未经请求不提交或推送远端。

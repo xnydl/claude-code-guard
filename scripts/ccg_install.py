@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install guard files after the customer names a node (or confirms current proxy)."""
+"""Legacy fresh-install template; never overwrite an existing guard or Claude hooks."""
 
 from __future__ import annotations
 
@@ -19,6 +19,29 @@ from ccg_detect import claude_home, detect, guard_home, os_name, save_state
 
 def python_cmd() -> str:
     return sys.executable or "python3"
+
+
+def existing_installation() -> list[str]:
+    """Refuse implicit migrations before probing or writing anything."""
+    conflicts = []
+    for path in (Path.home() / ".local/claude-guard", guard_home()):
+        if path.exists():
+            conflicts.append(str(path))
+    hooks = claude_home() / "hooks"
+    for name in ("network-killswitch.sh", "network-request-hook.sh", "system-info-guard.sh",
+                 "ccg_detect.py", "ccg_guard.py", "hook_request.py", "hook_sysinfo.py"):
+        path = hooks / name
+        if path.exists():
+            conflicts.append(str(path))
+    settings = claude_home() / "settings.json"
+    if settings.exists():
+        try:
+            data = json.loads(settings.read_text(encoding="utf-8"))
+            if not isinstance(data, dict) or data.get("hooks"):
+                conflicts.append(str(settings))
+        except (OSError, ValueError, UnicodeError):
+            conflicts.append(str(settings))
+    return conflicts
 
 
 def write_settings(state: dict) -> Path:
@@ -113,6 +136,14 @@ def main() -> int:
     parser.add_argument("--timezone", default="")
     parser.add_argument("--ai-group", default="")
     args = parser.parse_args()
+
+    conflicts = existing_installation()
+    if conflicts:
+        print("拒绝覆盖已有保护部署或 Claude Hook；先按 references/maintenance.md 增量维护。",
+              file=sys.stderr)
+        for path in conflicts:
+            print(f"  {path}", file=sys.stderr)
+        return 73
 
     detected = detect()
     if detected["family"] == "unknown":

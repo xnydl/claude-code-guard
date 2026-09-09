@@ -1,51 +1,28 @@
-# 指纹浏览器（必须绑同一出口）
+# Camoufox 与登录浏览器
 
-Claude Code 的 OAuth / 登录页如果用系统 Chrome、Safari、Edge，会用另一条网和另一套指纹。登录必须走 Camoufox（或同等指纹浏览器），代理必须是 `state.json` 的 `upstream_port`，不要写死 7898。
+## 范围
 
-## 原则
+- 本机 BROWSER 指向 ~/.local/claude-guard/bin/claude-camoufox，网络检查后调用持久化启动器严格模式。
+- 不改 macOS 全局默认浏览器，不搬移/重建/删除普通 Chrome 用户目录，包括 ember 等既有 profile。
+- 当前持久化启动器显式用专用代理，不依赖 Wi-Fi SOCKS 开关。系统代理 Enabled:No 不证明 TUN 失效，也不证明浏览器受保护，要核对实际入口与绑定。
+- 登录由用户完成；BROWSER 已设置不授权自动登录或发送账号资料。
 
-1. **同一出口**：浏览器代理 = Claude Gate 的 upstream（探测出来的专用口或 mixed-port）。
-2. **同一出口 IP**：启动前经 7898 探测出口；GeoIP 得到时区、locale、经纬度。
-3. **一份档案跟一个节点**：节点或出口身份变了，换 profile，不要混 Cookie。
-4. **关 WebRTC**：否则 STUN 打出真实网卡 IP。
-5. **不要系统浏览器**：`settings.json` 的 `BROWSER` 必须是本 skill 的 `claude-camoufox`。
+## 节点、指纹与存储
 
-## 本机已有 Camoufox Persistent 时
+- 持久化目录按节点/路由身份派生，不按每次动态 IP 轮换。核对实际 profile_key 实现，不能只凭目录名判断账号。
+- locale、IANA 时区及 offset、字体、GeoIP 应一致。台湾使用 UTC+8，getTimezoneOffset() 为 -480 本身不是大陆 IP 泄漏。
+- 语言/字体结果不等于网络泄漏；不为检测页“全绿”任意改时区、系统语言或删字体。
+- 只在明确授权后定位并重置指定 profile，保留启动器、唯一指定节点及其他资料。换指纹不保证账号无法关联。
 
-`scripts/claude-camoufox.sh` 会调用：
+## 单节点要求
 
-```text
-python launch_camoufox.py --strict-network <oauth-url>
-```
+浏览器与 CLI 应使用同一唯一指定节点，其他叶子一律拒绝，不单独维护第二个允许列表。链式代理只允许入口结构不同，不能改变最终出口。此为最新 Skill 要求，不能把更新文档等同于修改了运行中代码。
 
-`--strict-network` 要求：Rule、TUN、AI 策略组叶子 = 绑定节点、经 Claude 域名探测到的 `loc` = 选定区域。不满足就拒绝打开。
+## 历史运行代码核对（2026-09-05，尚未按单节点要求改造）
 
-启动时用出口 IP 调 Camoufox 的 `geoip` / `get_geolocation`，再：
+- 启动检查 rule、TUN、Mihomo IPv6、允许叶子及出口地区；有 CLI 会话时还比较会话叶子/IP。
+- 约每 2 秒检查节点、每 30 秒复查出口；状态不可用、节点变化、出口验证失败可能关闭专用 context。
+- **不同于 CLI**：CLI 可更新同叶子的 TW 动态 IP；浏览器仍比较 pinned/session IP，不一致可能关闭。不能说两者已无缝兼容动态 IP。
+- 这是周期监控，不保证节点变化到关闭之间零窗口；无共享会话时以浏览器启动状态为基准。
 
-- `timezone`、`locale` 跟该 IP
-- 台湾用繁中系统字体（PingFang TC 等），不要用大陆默认字体去登台湾出口
-- `block_webrtc=True`
-- `persistent_context` 写在 `~/Library/Application Support/Camoufox Persistent/profiles/<node-hash>/`
-
-已有窗口且是严格模式：只把 URL 塞进队列，不要再开一套身份。
-
-## 客户没有 Persistent 包时
-
-至少满足：
-
-- Camoufox / Playwright 启动参数带 `proxy=http://127.0.0.1:7898`
-- `geoip=<经 upstream 测到的出口 IP>`
-- `block_webrtc=True`
-- 独立 `user_data_dir`，按节点名分目录
-- 打不开系统代理就退出，禁止直连
-
-## 换号
-
-旧 Camoufox profile 里的 `cookies.sqlite` 会带着被封账号的 claude.ai 登录态。`purge-identity.sh --purge-browser` 会删这些 profile。先退出浏览器再清。
-
-## 不要做
-
-- 用系统 Chrome / Edge / Safari 登录
-- 一个 profile 换多个节点复用
-- 开 IPv6 或 WebRTC「提高连通」
-- 在防护还没钉死节点时先打开登录页
+因动态 IP 退出时，核对叶子、会话与出口，再按授权重启。无感更新需另行修改浏览器验证/GeoIP 同步并测试，不能仅放宽检查或写成已完成。
