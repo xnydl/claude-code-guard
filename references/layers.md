@@ -8,7 +8,7 @@
 | UserPromptSubmit / PostToolBatch | CHECK 失败阻止相应 Hook 阶段 | 登录、遥测、更新、流式连接等每条请求均被检查 |
 | HTTP gate | 默认代理经专用入站转发 | 解密 HTTPS、逐请求重检、失效即断开全部连接 |
 | Mihomo 专用入站 | 与普通规则入口分离、绑定出口 | 同名节点背后服务器未变、地区绝对可信 |
-| macOS Seatbelt | 约束该进程及继承限制的子进程出站 | 允许的本地服务不会代转外网、其他独立进程也受限 |
+| macOS Seatbelt | 禁止改 Mihomo 控制口。Shell/脚本/数据库走真实网络 | 子进程直连 Anthropic、IPv6 旁路；依赖 HTTP_PROXY + Clash 规则 + TUN |
 | 浏览器监控 | 周期验证，失败关闭专用 context | 零延迟、逐包验证、与 CLI 动态 IP 行为完全一致 |
 | 工具信息 Hook | 匹配工具调用的文本规则 | 拦截原生 os.*、系统调用或所有子进程的信息访问 |
 
@@ -25,9 +25,9 @@ Hook 35 秒、控制口调用约 32 秒。总预算还须计入排队/控制器�
 ## 实现边界，不能省略
 
 - 现用 gate 的转发连接函数不调用检查函数；CHECK 是独立控制操作，没有失效后关闭全部隧道的持续监控。因此“全进程每条请求先检查”“波动立即杀进程”目前不成立。
-- 沙箱允许 localhost:* 和若干 Unix socket，另一允许的本地代理/服务可成为旁路。NO_PROXY 有本地开发例外，不是 gate 全覆盖的证明。
+- 沙箱放行普通出站后，shell/远端库不再因 EPERM 失败。Claude/Anthropic 仍靠 HTTP_PROXY → gate → 专用入站。未走 HTTP_PROXY 的客户端若直连 Anthropic，依赖 Clash TUN + claude 规则集；TUN 关闭时可能泄漏。
 - 缓存未按所有路由配置完整分区；共享 /tmp/claude-network-guard.session.json 会被多个 CLI 会话覆盖或解除绑定，不能声称多会话隔离完善。
-- gate 对一个既有内部开发域名走普通规则入口，其他目标走专用入口。迁移须重新授权例外，不复制内部域名或扩大为全量 DIRECT。
+- HTTP CONNECT 默认真 Claude 走专用入站。仅用户授权的域名后缀可走规则入站。不要复制另一台机器的域名，也不要把数据库流量送进专用入站。
 - trace/GeoIP 是外部观测信号，不是全部服务请求的路径证明。
 
 更强的全流量 fail-closed 是独立改造：收窄网络出口、防本地转发旁路、新连接验证、失效关闭存量隧道、按会话与路由分区缓存。仍需处理持久连接和检查竞态，不能只加 prompt Hook 就宣称完成。

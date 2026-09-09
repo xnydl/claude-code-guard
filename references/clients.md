@@ -16,7 +16,7 @@
 | ccg_detect.py --list | 旧跨平台探测辅助，结果仍需核对 |
 | ccg_install.py / ccg_guard.py / ccg_gate.py | 旧单节点通用模板，安装至 ~/.claude-guard/，不是现用本机运行版本 |
 | wrapper.sh/.ps1、camoufox.sh/.ps1 | 旧通用配套，不能替换现用持久化启动器 |
-| claude-wrapper.sh、claude-network-gate.py、claude-camoufox.sh、config.example.env | 历史 macOS 样例，有过期行为/路径，不能作为维护更新源 |
+| claude-wrapper.sh、claude-network-gate.py、claude-camoufox.sh、config.example.env | macOS 样例。gate 可用 `CCG_RULES_HOST_SUFFIXES` 把授权域名送到规则入站；沙箱样例放行 shell/数据库。不能覆盖已有 ~/.local/claude-guard 部署 |
 
 旧安装器仅输出 listener YAML 建议，不会自动配置 Mihomo；选定端口不代表入口已存在。它使用单个 expected_node，但缺少完整链式/动态 IP 会话策略。旧 ccg_gate.py 有检查/监控逻辑，现用 gate 则不同，不能混用描述。
 

@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import re
 import socket
@@ -177,6 +179,28 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(ccg_install.main(), 73)
             for action in (detect, copy, save, write):
                 action.assert_not_called()
+
+
+class GateRoutingTests(unittest.TestCase):
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location(
+            "ccg_sample_gate", HERE / "claude-network-gate.py")
+        self.gate = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.gate)
+
+    def test_default_suffixes_empty_so_claude_stays_pinned(self):
+        with patch.dict(os.environ, {"CCG_RULES_HOST_SUFFIXES": ""}, clear=False):
+            os.environ.pop("CCG_RULES_HOST_SUFFIXES", None)
+            self.assertFalse(self.gate.uses_clash_rules("api.anthropic.com"))
+            self.assertFalse(self.gate.uses_clash_rules("claude.ai"))
+            self.assertFalse(self.gate.uses_clash_rules("db.example.com"))
+
+    def test_authorized_suffixes_do_not_match_sibling_domains(self):
+        with patch.dict(os.environ, {"CCG_RULES_HOST_SUFFIXES": "example.com,corp.internal"}):
+            self.assertTrue(self.gate.uses_clash_rules("db.example.com"))
+            self.assertTrue(self.gate.uses_clash_rules("example.com"))
+            self.assertFalse(self.gate.uses_clash_rules("evilexample.com"))
+            self.assertFalse(self.gate.uses_clash_rules("api.anthropic.com"))
 
 
 class PackageTests(unittest.TestCase):

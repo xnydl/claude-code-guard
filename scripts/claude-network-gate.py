@@ -1,10 +1,13 @@
 #!/usr/bin/python3
 
-"""Fail-closed TCP gate for the Claude Code process tree.
+"""TCP gate for the Claude Code process tree.
 
-Every new proxy connection is checked against the local network guard before
-it is relayed to the listener pinned to the customer-selected leaf.
-The payload is never inspected or logged.
+Claude/Anthropic HTTP_PROXY bytes go to the pinned inbound :7898 after a
+guard check. Optional CCG_RULES_HOST_SUFFIXES (comma-separated) send matching
+CONNECT hosts to the rules inbound :7897. The payload is never logged.
+
+Shell/DB clients that ignore HTTP_PROXY do not pass through this process;
+the Seatbelt profile must allow those on the real network.
 """
 
 from __future__ import annotations
@@ -21,7 +24,8 @@ from typing import Optional, Tuple
 
 LISTEN_ADDRESS = ("127.0.0.1", 7899)
 CONTROL_ADDRESS = ("127.0.0.1", 7900)
-UPSTREAM_ADDRESS = ("127.0.0.1", 7898)
+PINNED_UPSTREAM = ("127.0.0.1", 7898)
+RULES_UPSTREAM = ("127.0.0.1", 7897)
 GUARD = os.path.expanduser("~/.claude/hooks/network-killswitch.sh")
 GUARD_TIMEOUT_SECONDS = 6
 FULL_GUARD_TIMEOUT_SECONDS = 32
@@ -100,6 +104,59 @@ def safety_monitor() -> None:
         last_safe = ok
 
 
+def rules_host_suffixes() -> tuple[str, ...]:
+    raw = os.environ.get("CCG_RULES_HOST_SUFFIXES", "").strip()
+    if not raw:
+        return ()
+    return tuple(part.strip().lower().rstrip(".") for part in raw.split(",") if part.strip())
+
+
+def host_from_http_prefix(data: bytes) -> Optional[str]:
+    if not data:
+        return None
+    first = data.split(b"\r\n", 1)[0].decode("latin1", "replace")
+    parts = first.split()
+    if len(parts) < 2:
+        return None
+    method, target = parts[0].upper(), parts[1]
+    if method == "CONNECT":
+        hostport = target.strip()
+        if hostport.startswith("[") and "]:" in hostport:
+            return hostport[1:hostport.index("]")].lower()
+        return hostport.rsplit(":", 1)[0].lower()
+    if "://" in target:
+        rest = target.split("://", 1)[1]
+        host = rest.split("/", 1)[0]
+        if host.startswith("[") and "]" in host:
+            return host[1:host.index("]")].lower()
+        return host.rsplit(":", 1)[0].lower()
+    return None
+
+
+def uses_clash_rules(host: Optional[str]) -> bool:
+    if not host:
+        return False
+    host = host.lower().rstrip(".")
+    return any(host == suffix or host.endswith("." + suffix) for suffix in rules_host_suffixes())
+
+
+def peek_http_prefix(sock: socket.socket, limit: int = 8192) -> bytes:
+    sock.settimeout(3.0)
+    buf = b""
+    try:
+        while b"\r\n" not in buf and len(buf) < limit:
+            chunk = sock.recv(1024)
+            if not chunk:
+                break
+            buf += chunk
+    except OSError:
+        return buf
+    finally:
+        sock.settimeout(None)
+        sock.setblocking(True)
+    return buf
+
+
 def relay_connection(client: socket.socket) -> None:
     upstream: Optional[socket.socket] = None
     pair: Optional[Tuple[socket.socket, socket.socket]] = None
@@ -110,9 +167,14 @@ def relay_connection(client: socket.socket) -> None:
             logging.warning("connection denied by guard: %s", reason)
             return
 
-        upstream = socket.create_connection(UPSTREAM_ADDRESS, timeout=3.0)
         client.setblocking(True)
+        prefix = peek_http_prefix(client)
+        host = host_from_http_prefix(prefix)
+        upstream_addr = RULES_UPSTREAM if uses_clash_rules(host) else PINNED_UPSTREAM
+        upstream = socket.create_connection(upstream_addr, timeout=3.0)
         upstream.setblocking(True)
+        if prefix:
+            upstream.sendall(prefix)
         pair = (client, upstream)
         with active_lock:
             active_pairs.add(pair)

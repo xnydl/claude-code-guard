@@ -1,12 +1,20 @@
 ---
 name: claude-code-guard
 description: >
-  配置、维护或排查 Claude Code 本地网络保护：核对现有 wrapper、Clash/Mihomo 专用入站、单一固定最终出口节点、链式代理、动态住宅 IP、网络 Hook、macOS 沙箱与 Camoufox 登录浏览器。也用于明确授权的账号残留扫描或清理。用户提到 claude-code-guard、Claude 防封策略、代理断连阻断、节点漂移、网络 Hook 误拦截时使用；不能保证不封号、绝对不泄漏或不同账号无法关联。
+  配置、维护或排查 Claude Code 本地网络保护：Claude/Anthropic 的 HTTP(S) 走专用入站与唯一固定叶子；shell、脚本、远端数据库不拦。核对 wrapper、Clash/Mihomo 专用入站、链式代理、动态住宅 IP、网络 Hook、macOS 沙箱与 Camoufox。也用于明确授权的账号残留扫描或清理。用户提到 claude-code-guard、Claude 防封、远端库被拦截、Seatbelt EPERM、代理断连阻断、节点漂移时使用；不能保证不封号、绝对不泄漏或不同账号无法关联。
 ---
 
 # Claude Code 网络保护 Skill
 
-目标是可核验的路由约束、故障阻断与本地数据隔离，不是绕过服务条款或承诺账号安全。遵守服务适用地区与使用规则；不把节点名、住宅 IP 或第三方评分当作官方认可。
+目标是可核验的路由约束，不是绕过服务条款或承诺账号安全。遵守服务适用地区与使用规则；不把节点名、住宅 IP 或第三方评分当作官方认可。复制步骤见 [README.md](README.md)。
+
+## 流量分流（必须）
+
+只保护 Claude Code / Claude CLI **发往 Claude、Anthropic 站点的 HTTP(S)**：`HTTP_PROXY` → 本地 gate → 专用入站 → 用户指定的 **一个** 最终叶子。
+
+**不要拦截** shell、脚本、git、远端数据库客户端。它们通常不用 HTTP 代理，Seatbelt 应放行真实网络，由 Clash 规则模式把国内目标 DIRECT。只拒绝进程改 Mihomo 控制口。
+
+HTTP CONNECT 默认真 Claude 走专用入站。用户**当场授权**的公司/国内域名后缀，才可以送到规则入站；不要复制另一台机器的域名列表，也不要为了数据库去放宽专用入站。改沙箱后必须重启 Claude，旧进程仍是旧规则。
 
 ## 先分清维护还是新装
 
@@ -22,7 +30,7 @@ description: >
 
 ## 路由与节点规则
 
-- Clash **规则模式**允许国内开发服务 DIRECT、Claude 走独立上游。TUN 开启不等于全部流量走代理；系统代理开关不能证明实际出口。
+- Clash **规则模式**允许国内开发服务 DIRECT、Claude 走独立上游。TUN 开启不等于全部流量走代理；系统代理开关不能证明实际出口。Seatbelt 不拦 shell/脚本/远端库。
 - **只能指定一个最终出口节点**，按完整叶子名精确匹配。不得添加节点白名单、备用出口或自动轮换；配置仅保存单个 expected_node 字符串，不接受列表或从多个候选中默认选一个。支持单跳与链式代理；“单跳”不是 Clash DIRECT。
 - 从实际专用入站的 proxy 解析 Selector 的 now，再核对 dialer-proxy/入口依赖。允许 Selector 作为路由根，但最终出口必须等于唯一指定节点。循环、缺失、DIRECT/REJECT/PASS 或无法确定的链路不能当作已验证。
 - 🤖 AI服务 可指向台湾 Selector，但不必是 CLI 专用入口的路由根。不能只看 UI，也不能假定旧策略组 claude-guard-exit 存在。
@@ -58,4 +66,4 @@ description: >
 - 测试错误节点、错误地区、控制器失联、上游断开、IPv6/DNS、备用 loopback 代理及长连接；没测的写“未验证”。
 - --fast 不证明地区；Hook 存在不证明每条 HTTP 请求被检查；启动器路径不证明当前进程受沙箱限制。
 - 更新 CLI 只更新真实二进制，保留 wrapper/Hook/设置/服务。用前后摘要证明保护文件未改；没有前置摘要就不能宣称“哈希证明未改”。
-- 更新 Skill 后运行 scripts/test_skill.py 及 Skill Creator 的 quick_validate.py，比较源码与使用副本。未经请求不提交或推送远端。
+- 更新 Skill 后运行 scripts/test_skill.py。用户明确要求发布到 GitHub 时才提交并推送该仓库。

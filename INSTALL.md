@@ -30,6 +30,8 @@ python3 scripts/ccg_audit.py
 
 本机现用 `~/.local/claude-guard/` 与旧通用模板的 `~/.claude-guard/` 不同。旧安装器会拒绝覆盖发现的保护文件或已有 Hook；不要删除这些文件来绕过检查。按实际部署增量维护，保留默认权限、鼠标、开发分流及普通浏览器资料。
 
+Seatbelt 不要再 `deny network-outbound` 只放行 localhost：那会把 mysql/redis/mongo 等不用 HTTP 代理的客户端打成 EPERM。只拒绝 Clash 控制 socket。改沙箱后必须重启 Claude。完整流量表见 `README.md`。
+
 ## 3. 新环境只指定一个最终节点
 
 先打开你自己的梯子，然后：

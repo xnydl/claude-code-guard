@@ -1,9 +1,15 @@
 (version 1)
 
-; Direct IP / DNS / non-loopback TCP+UDP is denied.
-; Remote traffic must use the unsandboxed gate on localhost:7899.
-; Loopback is allowed so httptest, docker-mapped ports and local preview work.
-; Unix sockets stay denied so the process cannot switch the Clash exit.
+; Claude Code and children inherit this sandbox.
+;
+; Only Claude/Anthropic HTTPS must stay on the pinned path:
+; HTTP_PROXY → localhost:7899 → dedicated inbound :7898.
+;
+; Shell, scripts, git, and database clients may use the real network
+; (Clash TUN + rule mode: CN DIRECT). Do not fail-closed those.
+;
+; Deny Mihomo's control socket so this process cannot switch the Claude
+; exit node.
 (allow default)
-(deny network-outbound)
-(allow network-outbound (remote ip "localhost:*"))
+(deny network-outbound (remote unix-socket (regex #"verge-mihomo\.sock$")))
+(deny network-outbound (remote unix-socket (regex #"^(/private)?/tmp/verge/")))
