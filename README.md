@@ -1,31 +1,74 @@
 # Claude Code Guard
 
-给本机 Claude Code / Claude CLI **发往 Claude、Anthropic 的请求**钉在一个固定最终出口节点上。  
-**shell、脚本、git、远端数据库不要拦**——那些流量走 Clash 规则（国内 DIRECT）。
+Claude Code Guard 是一个给 Claude Code / Claude CLI 使用的本地网络保护 Skill：把发往 Claude、Anthropic 的 HTTP(S) 请求送入专用代理入口，并绑定到用户明确选择的**一个最终出口节点**。
 
-不保证不封号、绝对不泄漏，或不同账号无法关联。不要把节点名、住宅 IP、第三方评分当成官方认可。
+它解决的是“路由约束与可核验维护”，不是绕过服务条款，也不保证不封号、绝对不泄漏或不同账号无法关联。不要把节点名、住宅 IP、旗帜或第三方评分当成官方认可。
 
-## 保护什么，不保护什么
+本文是从安装到验收的完整教程。只想把 Skill 装进 Codex、Claude Code 或其他 Agent 时，先看[快速安装](#快速安装)；已经有保护环境时，先看[已有环境维护](#已有环境维护)，不要直接运行旧安装器覆盖现有配置。
+
+## 保护边界
 
 | 流量 | 怎么走 |
 | --- | --- |
 | Claude Code / CLI → `claude.ai` / `api.anthropic.com` | `HTTP_PROXY` → 本地 gate `:7899` → 专用入站 `:7898` → **唯一指定叶子** |
-| curl 等仍走系统代理、且命中你授权的国内/公司域名 | gate `:7899` → 规则入站 `:7897` → Clash Rule（通常 CN DIRECT） |
-| shell / 脚本 / mysql / redis / mongo / git | **真实网络**。Seatbelt 不拦。Clash TUN + 规则分流 |
-| Mihomo / Clash 控制口 | 沙箱拒绝，避免进程自己改出口 |
+| 用户授权的公司/国内 HTTP 域名 | gate → 规则入站 `:7897` → Clash Rule（通常 DIRECT） |
+| shell / 脚本 / MySQL / Redis / MongoDB / git | **真实网络**，由 Clash 规则与系统网络处理 |
+| Mihomo / Clash 控制口 | 沙箱拒绝，避免进程自行切换出口 |
 
-不要做：节点白名单、备用出口、自动轮换。只指定 **一个** 完整叶子名。
+不要做节点白名单、备用出口或自动轮换。只指定**一个**完整叶子名。
+
+## 工作原理
+
+```text
+Claude Code / Claude CLI
+        │ HTTP_PROXY / HTTPS_PROXY
+        ▼
+本地 network gate（示例 :7899）
+        │
+        ▼
+Clash / Mihomo 专用入口（示例 :7898）
+        │ 只解析到一个最终叶子
+        ▼
+用户选定的出口节点
+```
+
+shell、脚本、git、MySQL、Redis、MongoDB 等通常不走 HTTP 代理，应该由真实网络和 Clash 规则分流；不要为了“所有流量都受保护”把它们强行送进 Claude 专用入口。macOS 沙箱只拒绝进程修改 Clash/Mihomo 控制口，不能替代 HTTP_PROXY、Clash 规则或 TUN 的路径验证。
+
+## 快速安装
+
+需要 Node.js 22+。在终端执行：
+
+```bash
+npx skills add xnydl/claude-code-guard -g -y
+```
+
+安装后重新打开 Agent 会话，然后输入：
+
+```text
+/claude-code-guard
+```
+
+安装 Skill **不会**自动改 Clash、wrapper、沙箱、账号资料或浏览器。Skill 只是让 Agent 获得本项目的维护与诊断说明；网络保护仍需按本教程完成配置并验收。
+
+如果不使用 `npx skills`，也可以把仓库目录链接到对应工具的 skills 目录：
+
+```bash
+mkdir -p ~/.claude/skills
+ln -s "$PWD/claude-code-guard" ~/.claude/skills/claude-code-guard
+```
+
+Grok 使用 `~/.grok/skills/claude-code-guard`；Windows 使用 `%USERPROFILE%\\.claude\\skills\\claude-code-guard` 或 `%USERPROFILE%\\.grok\\skills\\claude-code-guard`。详细说明见 [INSTALL.md](INSTALL.md)。
 
 ## 复制到另一台机器
 
-不要复制别人的节点名、端口、公司域名。先打开你自己的梯子。
+不要复制别人的节点名、端口或公司域名。先打开你自己的梯子。
 
-1. Clash / Mihomo：**规则模式**，TUN 开，IPv6 关。mixed-port 作为普通规则入口（示例 `:7897`）。
-2. 增加一条 **专用 mixed 入站**（示例 `:7898`，只听 `127.0.0.1`，UDP 关），`proxy` 填你选定的那一个叶子完整名字。
-3. 用 Skill 里的 wrapper：Claude 的 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` 指向 gate（示例 `:7899`）。不要把国内库主机写进 `NO_PROXY` 来“绕过保护”——数据库客户端本来就不走 HTTP 代理。
-4. Seatbelt 放行普通出站，**只拒绝** Clash 控制 socket。旧模板若 `deny network-outbound` 只放行 localhost，Go 的 MySQL/Redis/Mongo 会 `EPERM`。改沙箱后 **必须重启 Claude**，旧进程还是旧规则。
-5. 启动前 / 发 prompt 时校验：当前叶子 == 你指定的那一个；同叶子的动态 IP 可以更新，换叶子就拦截。失败拦截这一次请求，不要杀进程。
-6. 可选：环境变量 `CCG_RULES_HOST_SUFFIXES=example.com,corp.example`（逗号分隔）。只有 HTTP 代理 CONNECT 会看这份列表。不要把别人的域名抄过来。
+1. Clash / Mihomo 使用**规则模式**；通常开启 TUN、关闭 IPv6。mixed-port 作为普通规则入口（示例 `:7897`）。
+2. 增加一条**专用 mixed 入站**（示例 `:7898`，只听 `127.0.0.1`，UDP 关），`proxy` 填你选定的那一个叶子完整名字。
+3. Claude 的 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 指向 gate（示例 `:7899`）。不要把国内库主机写进 `NO_PROXY` 来“绕过保护”——数据库客户端本来就不走 HTTP 代理。
+4. Seatbelt 放行普通出站，**只拒绝** Clash 控制 socket。旧模板若 `deny network-outbound` 只放行 localhost，Go 的 MySQL/Redis/Mongo 会 `EPERM`。改沙箱后**必须重启 Claude**，旧进程还是旧规则。
+5. 启动前或发 prompt 时校验：当前叶子等于指定叶子；同叶子的动态 IP 可以更新，换叶子就拦截。失败拦截这一次请求，不要杀进程。
+6. 可选：`CCG_RULES_HOST_SUFFIXES=example.com,corp.example`（逗号分隔）。只有 HTTP 代理 CONNECT 会看这份列表，不要把别人的域名抄过来。
 
 探测（不自动改配置）：
 
@@ -39,26 +82,106 @@ python3 scripts/ccg_detect.py --list
 python3 scripts/ccg_audit.py
 ```
 
-## 安装这个 Skill
+## 新环境的完整配置流程
 
-需要 Node.js 22+：
+### 1. 先识别环境
+
+确认操作系统、Claude 命令实际指向、Clash/Mihomo 类型、控制器端口、监听端口和已有 wrapper。探测脚本不自动修改系统：
 
 ```bash
-npx skills add xnydl/claude-code-guard -g -y
+python3 scripts/ccg_detect.py --list
 ```
 
-或解压后按 [INSTALL.md](INSTALL.md) 链到 `~/.claude/skills` / `~/.grok/skills`。新开对话，输入 `/claude-code-guard`。
+探测结果可能包含控制器 secret、内部地址或当前节点信息，不要原样贴到公开 issue、聊天或网页。
 
-安装 Skill **不会**自动改 Clash、wrapper 或沙箱。
+### 2. 只选择一个最终叶子
 
-## 常见坑
+从你自己的 Clash/Mihomo 配置和运行时状态中选出一个完整叶子名，例如 `TW-Home-01`。不要把节点列表、备用节点或“自动选择”当成绑定目标。Selector 可以作为路由根，但最终解析出的叶子必须等于这个唯一目标。
 
-- **远端库被拦、本地库可以**：几乎一定是旧沙箱只放行 localhost。更新 `claude-network.sb` 后重启 Claude。
-- **改了文件仍 EPERM**：当前 Claude 进程还是启动时的旧沙箱。
-- **把作者的节点名/端口原样粘贴**：每台机器的 Clash 入站和叶子名都不同。
-- **为了“防泄漏”把所有 TCP 送进 7898**：国内 RDS/Redis 会被送到境外叶子，表现为偶发连不上。数据库走规则分流即可。
+固定的是叶子名称，不等于公网 IP 永久不变；同一叶子的动态 IP 可以更新。换叶子时要明确替换旧目标、重新绑定并重新验收，不能追加一个备用出口。
 
-Agent 操作说明见 [SKILL.md](SKILL.md)。分层与验收见 [references/layers.md](references/layers.md)。维护见 [references/maintenance.md](references/maintenance.md)。
+### 3. 配置分层入口
+
+典型本机端口关系如下，端口只是示例，必须以自己的运行配置为准：
+
+| 入口 | 示例 | 用途 |
+| --- | ---: | --- |
+| 规则入口 | `7897` | 普通开发流量与用户授权域名 |
+| 专用入口 | `7898` | 绑定唯一最终叶子的 Claude 流量 |
+| 本地 gate | `7899` | Claude wrapper 的 HTTP(S) 代理 |
+
+专用入口应只监听 loopback、关闭 UDP，并指向你选定的单个叶子。旧配置若使用 `deny network-outbound` 只放行 localhost，会把 MySQL/Redis/Mongo 等直接连接打成 `EPERM`；应改为放行普通出站，仅拒绝 Clash 控制 socket。修改沙箱后必须完全重启 Claude，旧进程仍在使用旧规则。
+
+### 4. 运行安装器前先读差异
+
+仓库里的 `ccg_install.py`、`ccg_guard.py`、`ccg_gate.py` 是跨平台旧模板，不等同于某台机器上已经运行的保护部署。新环境可以先让安装器输出建议，但不要把成功退出当成“网络保护已完成”：
+
+```bash
+python3 scripts/ccg_install.py --node "你的唯一叶子名" --region TW
+```
+
+它不会自动合并 Mihomo 配置，也不会自动部署 listener 或服务。已有 `~/.local/claude-guard/`、`~/.claude-guard/`、Hook 或启动器时，先维护现有实现。
+
+### 5. 验证允许与拒绝路径
+
+至少验证这些情形：
+
+1. 当前最终叶子等于唯一指定目标时，Claude 可以发起请求。
+2. 切换到错误节点、错误地区或无法解析的链路时，本次请求被阻止。
+3. 控制器失联、专用入口断开、IPv6/DNS 配置不完整时，不把旧缓存当成新成功。
+4. shell、脚本和远端数据库仍能按预期工作，不因沙箱误拦截而出现 `EPERM`。
+
+`--fast` 只能做快速配置检查，不能证明地区；Hook 存在不能证明每一条 HTTP 请求都被检查；启动器路径也不能证明当前进程确实受沙箱限制。
+
+## 已有环境维护
+
+已有保护环境时，顺序应是：
+
+```bash
+# 获取只读前置摘要
+python3 scripts/ccg_audit.py
+
+# 离线验证 Skill 文件
+python3 scripts/test_skill.py
+```
+
+维护时保留现有 wrapper、Hook、权限偏好、开发分流和普通浏览器资料；不要因更新 Skill 或 Claude CLI 自动清 Cookie、聊天、钥匙串、账号或 Camoufox profile。更新 Skill 也不等于部署更新，不需要顺手重启 Clash、Claude 或浏览器。
+
+账号残留扫描或清理必须有明确的应用、账号和 profile 范围授权。先读[清理边界](references/identity-purge.md)，不要把“更新工具”理解成“可以清空登录资料”。
+
+## 常见问题排查
+
+### 远端数据库被拦，本地数据库正常
+
+通常是旧 Seatbelt 只放行 localhost，或把数据库连接错误送进了 Claude 专用 HTTP 入站。确认沙箱已放行普通出站、数据库没有写进 `NO_PROXY` 规避保护逻辑、Clash 规则仍负责国内直连；修改后完全重启 Claude。
+
+### 改了沙箱文件仍然 `EPERM`
+
+正在运行的 Claude 进程不会自动加载新沙箱。关闭旧进程并重新从保护入口启动，再复查实际命令路径与环境变量。
+
+### 节点名正确，但仍无法确认出口
+
+节点名、旗帜和延迟都不是地区证据。通过专用入站解析 Selector 的 `.now`、`dialer-proxy` 依赖和实际连接链，确认最终叶子；控制器不可用或链路不完整时，结论只能是“未验证”。
+
+### 想加备用节点自动切换
+
+本项目故意不支持这种默认配置。备用节点会把失败时的路由边界变得不可见；需要换出口时，明确替换唯一目标并重新核对、重新绑定。
+
+### 想把所有流量都经过 Claude 专用入口
+
+不要这样做。数据库、git 和开发服务不应被送到境外 Claude 出口；它们应保持真实网络并使用 Clash 规则分流。更严格的全流量 fail-closed 是独立改造，不能仅靠 Prompt Hook 或一个 HTTP 代理变量宣称完成。
+
+## 更新与验收清单
+
+- [ ] Skill 已安装，且新会话能读取 `/claude-code-guard`。
+- [ ] 已确认本机真实 wrapper、Hook、沙箱、代理入口和控制器。
+- [ ] 只有一个完整 `expected_node`，没有备用节点或自动轮换。
+- [ ] Claude/Anthropic 走 `HTTP_PROXY` → gate → 专用入口。
+- [ ] shell、脚本、git、数据库未被错误送进专用入口。
+- [ ] 错误节点、错误地区、控制器失联和入口断开会拒绝相应操作。
+- [ ] `python3 scripts/test_skill.py` 通过；未测试的网络能力明确标记为未验证。
+
+完整的 Agent 操作边界见 [SKILL.md](SKILL.md)，客户端识别见 [references/clients.md](references/clients.md)，维护顺序见 [references/maintenance.md](references/maintenance.md)，分层与验收限制见 [references/layers.md](references/layers.md)。
 
 ---
 
@@ -73,4 +196,5 @@ L 站用户可享社区价，每个品一月一次优惠
 支持企业对接，对公转账，开票，普票专票都可
 
 也欢迎佬友们吃回扣，合作共赢～（为了不浪费我的富可敌国，我要争取做到每日冒泡 hh
+
 原作者的邀请链接：https://ssyai.xytpark.cn/register?invite=R73D442E6A446
