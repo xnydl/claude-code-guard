@@ -28,11 +28,11 @@ Windows：把整个文件夹拷到 `%USERPROFILE%\.grok\skills\claude-code-guard
 python3 scripts/ccg_audit.py
 ```
 
-本机现用 `~/.local/claude-guard/` 与旧通用模板的 `~/.claude-guard/` 不同。旧安装器会拒绝覆盖发现的保护文件或已有 Hook；不要删除这些文件来绕过检查。按实际部署增量维护，保留默认权限、鼠标、开发分流及普通浏览器资料。
+目标机器可能使用 `~/.claude-guard/` 新布局，也可能存在 `~/.local/claude-guard/` 旧布局。安装器会拒绝覆盖发现的保护文件或已有 Hook；不要删除这些文件来绕过检查。按实际部署增量维护，保留默认权限、鼠标、开发分流及普通浏览器资料。
 
 Seatbelt 不要再 `deny network-outbound` 只放行 localhost：那会把 mysql/redis/mongo 等不用 HTTP 代理的客户端打成 EPERM。只拒绝 Clash 控制 socket。改沙箱后必须重启 Claude。完整流量表见 `README.md`。
 
-## 3. 新环境只指定一个最终节点
+## 3. 新环境默认单节点，可显式配置固定主备
 
 先打开你自己的梯子，然后：
 
@@ -42,13 +42,27 @@ python3 claude-code-guard/scripts/ccg_detect.py --list
 
 Windows 用 `py -3` 或 `python`。
 
-从清单里确认 **一个固定叶子节点**的完整名字，不配置白名单、备用节点或自动轮换。单跳/链式代理均须解析到这个唯一节点；更换时替换旧目标而非追加。节点名字或旗帜不代表实际地区，仍需出口验证。
+默认从清单里确认 **一个固定叶子节点**的完整名字，不配置白名单或自动轮换。单跳/链式代理均须解析到这个节点；更换时替换旧目标。节点名字或旗帜不代表实际地区，仍需出口验证。
 
-先读 `references/clients.md`：通用脚本是旧模板，并未实现所有现用链式/会话策略。先按该机能力适配、在无账号环境测试，获准部署后才使用单一 `--node` 参数，例如：
+只有用户明确要求“主挂后自动切备用”时，才再确认一个具体、不同的备用叶子和一个专用 Selector 路由根。该 Selector 必须且只能直接包含这两个叶子。主备不是节点池：任一时刻 `expected_node` 只有一个值，默认不自动回切，也不会按延迟选择第三个节点。失败阈值限制为 2-5，严格探测间隔限制为 5-60 秒。
+
+先读 `references/clients.md`：通用脚本不等于任一现有机器的部署。先按该机能力适配、在无账号环境测试，获准部署后才使用参数。例如默认单节点：
 
 ```bash
 python3 claude-code-guard/scripts/ccg_install.py --node "这里换成你选的完整节点名" --region TW
 ```
+
+显式主备：
+
+```bash
+python3 claude-code-guard/scripts/ccg_install.py \
+  --node "主节点完整名称" \
+  --secondary-node "备用节点完整名称" \
+  --ai-group "专用 Selector 名称" \
+  --region TW
+```
+
+主备参数只生成受控 failover 状态和 listener 建议：主节点连续失败达到阈值后封闸、关闭活动隧道、切到备用，再严格核对实际叶子、明确地区与 Anthropic 响应；切换失败会尝试并验证回滚，无法确认则保持阻断。它不会配置多个备用或自动回切。
 
 这个安装器只输出专用 listener 的配置建议，不自动合并 Mihomo 配置或完成服务部署；不能仅凭脚本退出成功就登录。没有选定节点、入口未配置或检查未通过时，不进行登录。
 

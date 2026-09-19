@@ -14,6 +14,7 @@ from glob import glob
 from pathlib import Path
 from typing import Any
 from urllib.error import URLError
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 
@@ -253,6 +254,46 @@ def controller_get(controller: dict[str, Any], endpoint: str) -> dict[str, Any] 
     return http_get_json(url, secret=str(controller.get("secret") or ""))
 
 
+def controller_select_proxy(controller: dict[str, Any], group: str, node: str) -> bool:
+    """Select one Mihomo group member without exposing controller credentials."""
+    endpoint = f"/proxies/{quote(group, safe='')}"
+    body = json.dumps({"name": node}, ensure_ascii=False).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    secret = str(controller.get("secret") or "")
+    if secret:
+        headers["Authorization"] = f"Bearer {secret}"
+
+    if controller.get("kind") != "unix":
+        url = str(controller.get("url", "")).rstrip("/") + endpoint
+        try:
+            with urlopen(Request(url, data=body, headers=headers, method="PUT"), timeout=3) as response:
+                return 200 <= response.status < 300
+        except (OSError, URLError, TimeoutError, ValueError):
+            return False
+
+    socket_path = str(controller.get("path") or "")
+    if not socket_path:
+        return False
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(3)
+        sock.connect(socket_path)
+        request = (
+            f"PUT {endpoint} HTTP/1.0\r\n"
+            "Host: localhost\r\n"
+            "Content-Type: application/json\r\n"
+            f"Content-Length: {len(body)}\r\n"
+            "Connection: close\r\n\r\n"
+        ).encode("ascii") + body
+        sock.sendall(request)
+        status_line = sock.recv(256).split(b"\r\n", 1)[0]
+        sock.close()
+    except OSError:
+        return False
+    parts = status_line.split()
+    return len(parts) >= 2 and parts[1].isdigit() and 200 <= int(parts[1]) < 300
+
+
 def walk_leaf(proxies: dict[str, Any], root: str) -> tuple[list[str], str]:
     chain: list[str] = []
     current = root
@@ -279,7 +320,13 @@ def classify_nodes(proxies: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(details, dict):
             continue
         kind = str(details.get("type") or "")
-        item = {"name": name, "type": kind, "now": details.get("now")}
+        members = details.get("all")
+        item = {
+            "name": name,
+            "type": kind,
+            "now": details.get("now"),
+            "all": list(members) if isinstance(members, list) else [],
+        }
         if kind in GROUP_TYPES:
             chain, leaf = walk_leaf(proxies, name)
             item["leaf"] = leaf

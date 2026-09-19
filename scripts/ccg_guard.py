@@ -38,7 +38,30 @@ def proxy_url(state: dict) -> str:
     return f"http://127.0.0.1:{int(port)}"
 
 
-def check_fast(state: dict) -> str | None:
+def check_fast(state: dict, *, allow_switching: bool = False) -> str | None:
+    failover = state.get("failover")
+    if isinstance(failover, dict) and failover.get("enabled"):
+        failure_threshold = failover.get("failure_threshold", 3)
+        probe_interval = failover.get("probe_interval_seconds", 10)
+        if (
+            isinstance(failure_threshold, bool)
+            or not isinstance(failure_threshold, int)
+            or isinstance(probe_interval, bool)
+            or not isinstance(probe_interval, int)
+        ):
+            return "Claude 网络保护：主备探测参数无效，保持阻断。"
+        if not 2 <= failure_threshold <= 5 or not 5 <= probe_interval <= 60:
+            return "Claude 网络保护：主备探测参数超出安全边界，保持阻断。"
+        role = str(failover.get("active_role") or "")
+        primary = str(failover.get("primary_node") or "")
+        secondary = str(failover.get("secondary_node") or "")
+        expected_for_role = {"primary": primary, "secondary": secondary}.get(role)
+        if role == "blocked":
+            return "Claude 网络保护：主备状态已锁定为 blocked，保持强制阻断。"
+        if not expected_for_role or str(state.get("expected_node") or "") != expected_for_role:
+            return "Claude 网络保护：主备角色与唯一出口状态不一致，保持阻断。"
+        if not allow_switching and failover.get("switching") is True:
+            return "Claude 网络保护：出口正在受控切换并验证，保持阻断。"
     node, _region = expected(state)
     family = state.get("family")
     if family == "unknown":
@@ -55,7 +78,9 @@ def check_fast(state: dict) -> str | None:
             return "Claude 网络保护：尚未确认客户已切到固定节点。"
         return None
 
-    configs = controller_get(controller, "/configs") or {}
+    configs = controller_get(controller, "/configs")
+    if not isinstance(configs, dict):
+        return "Claude 网络保护：Clash 控制口暂时无法读取运行配置。"
     mode = str(configs.get("mode") or "").lower()
     if mode and mode != "rule":
         return f"Claude 网络保护：Clash 当前不是 Rule 模式（{mode}），已拒绝。"
@@ -66,15 +91,32 @@ def check_fast(state: dict) -> str | None:
         return "Claude 网络保护：Clash IPv6 当前已开启，已拒绝。"
 
     if node:
-        proxies_json = controller_get(controller, "/proxies") or {}
+        proxies_json = controller_get(controller, "/proxies")
+        if not isinstance(proxies_json, dict):
+            return "Claude 网络保护：Clash 控制口暂时无法读取节点状态。"
         proxies = proxies_json.get("proxies")
-        if not isinstance(proxies, dict) or node not in proxies:
-            return "Claude 网络保护：选定的出口节点不存在或控制口读不到。"
+        if not isinstance(proxies, dict):
+            return "Claude 网络保护：Clash 控制口暂时无法读取节点状态。"
+        if node not in proxies:
+            return "Claude 网络保护：选定的出口节点不存在，已拒绝。"
         group = state.get("ai_group")
         if group and group in proxies:
+            if isinstance(failover, dict) and failover.get("enabled"):
+                group_details = proxies.get(str(group))
+                members = group_details.get("all") if isinstance(group_details, dict) else None
+                if (
+                    not isinstance(group_details, dict)
+                    or group_details.get("type") != "Selector"
+                    or not isinstance(members, list)
+                    or len(members) != 2
+                    or set(members) != {primary, secondary}
+                ):
+                    return "Claude 网络保护：主备 Selector 不再严格等于指定的一主一备，已拒绝。"
             _chain, leaf = walk_leaf(proxies, str(group))
             if leaf != node:
                 return f"Claude 网络保护：策略组 {group} 当前叶子不是已选定节点（实际：{leaf}）。"
+        elif isinstance(failover, dict) and failover.get("enabled"):
+            return "Claude 网络保护：主备 Selector 不存在，已拒绝。"
     return None
 
 
@@ -100,8 +142,14 @@ def parse_trace(text: str) -> tuple[str, str]:
     return ip, loc
 
 
-def check_full(state: dict) -> tuple[str | None, dict]:
-    err = check_fast(state)
+def check_full(
+    state: dict,
+    *,
+    use_cache: bool = True,
+    require_anthropic: bool = False,
+    allow_switching: bool = False,
+) -> tuple[str | None, dict]:
+    err = check_fast(state, allow_switching=allow_switching)
     if err:
         return err, {}
     _node, region = expected(state)
@@ -109,7 +157,7 @@ def check_full(state: dict) -> tuple[str | None, dict]:
     grace = int(state.get("probe_grace") or 90)
     cache_path = Path(state.get("probe_state") or (Path(tempfile.gettempdir()) / "claude-network-guard.state"))
     now = int(time.time())
-    if cache_path.is_file():
+    if use_cache and cache_path.is_file():
         raw = cache_path.read_text(encoding="utf-8").strip()
         parts = raw.split("|")
         if len(parts) >= 3:
@@ -138,6 +186,8 @@ def check_full(state: dict) -> tuple[str | None, dict]:
         except OSError:
             pass
         return f"Claude 网络保护：实际出口不在选定地区（期望：{region} 实际：{loc}）。", {}
+    if require_anthropic and loc != region:
+        return "Claude 网络保护：出口探测没有返回明确的目标地区。", {}
 
     http_code = "000"
     try:
@@ -152,6 +202,15 @@ def check_full(state: dict) -> tuple[str | None, dict]:
             http_code = "000"
 
     info = {"ip": ip, "region": loc or region, "http": http_code}
+    accepted_anthropic_codes = {400, 401, 403, 404, 405, 409, 422, 429}
+    try:
+        numeric_http_code = int(http_code)
+    except ValueError:
+        numeric_http_code = 0
+    if require_anthropic and not (
+        200 <= numeric_http_code < 400 or numeric_http_code in accepted_anthropic_codes
+    ):
+        return f"Claude 网络保护：Anthropic 接口探测失败（HTTP {http_code}）。", {}
     if ip and loc == region:
         cache_path.write_text(f"{now}|{ip}|{region}|{http_code}", encoding="utf-8")
     elif not ip:
@@ -174,7 +233,17 @@ def main() -> int:
         err = check_fast(state)
         return fail(err, as_hook) if err else 0
 
-    err, info = check_full(state)
+    if mode == "--probe-switch":
+        err, info = check_full(
+            state,
+            use_cache=False,
+            require_anthropic=True,
+            allow_switching=True,
+        )
+    elif mode == "--probe":
+        err, info = check_full(state, use_cache=False, require_anthropic=True)
+    else:
+        err, info = check_full(state)
     if err:
         return fail(err, as_hook)
     if mode == "--status":

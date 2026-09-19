@@ -1,56 +1,43 @@
-# 维护流程与本机基线
+# 维护流程与部署识别
 
-## 2026-09-05 核对
+先核对目标机器的 wrapper、网络门、Hook、Seatbelt、settings 与 Camoufox 启动器。以下是识别项，不是某台机器已完成抓包、断网或登录验收的证明。
 
-依据本机 wrapper、网络门、三个 Hook、Seatbelt、settings 与 Camoufox 启动器文件。是代码/配置基线，不是本次已抓包、断网或登录验收；实时网络状态/版本仍需另查。
-
-| 项目 | 本机位置/配置 |
+| 项目 | 维护时要确认的内容 |
 | --- | --- |
-| 保护入口 | ~/.local/claude-guard/bin/claude |
-| 原生 CLI | ~/.local/bin/claude，更新它不应替换保护入口 |
-| 网络检查 | ~/.claude/hooks/network-killswitch.sh |
-| 请求 Hook | ~/.claude/hooks/network-request-hook.sh |
-| 工具规则 | ~/.claude/hooks/system-info-guard.sh |
-| 网络门 | ~/.local/claude-guard/bin/claude-network-gate.py |
-| 沙箱 | ~/.local/claude-guard/claude-network.sb |
-| 登录入口 | ~/.local/claude-guard/bin/claude-camoufox |
-| 持久化启动器 | /Applications/Camoufox Persistent.app/Contents/Resources/launch_camoufox.py |
-| 设置 | ~/.claude/settings.json，其他机器还须查 CLAUDE_CONFIG_DIR |
-| 端口 | CLI → gate 7899 → 专用上游 7898；控制口 7900；普通分流入口 7897 |
-| listener | claude-guard-upstream，loopback、UDP 关闭，从其 proxy 解析路由 |
+| 保护入口 | `claude` 实际命令或 shell 函数，以及注入的代理变量 |
+| 运行目录 | 新布局通常是 `~/.claude-guard/`；旧部署可能是 `~/.local/claude-guard/` |
+| 请求 Hook | `~/.claude/hooks/` 中实际挂载的 UserPromptSubmit / PostToolBatch 检查 |
+| 网络门 | 运行中的 `ccg_gate.py` 或旧 gate 实现，以及真实监听端口 |
+| 沙箱 | 运行中的 `claude-network.sb`；修改后必须重启 Claude |
+| 状态 | 新模板使用 `~/.claude-guard/state.json`；不要把磁盘文件存在当成运行中证据 |
+| 代理链 | CLI → gate → 专用上游。端口是现场配置，不是跨机器默认 |
+| Mihomo listener | loopback、UDP 关闭；单节点指向具体叶子，主备模式指向专用 Selector |
 
-这些不是跨机器默认。旧模板 ~/.claude-guard/state.json 不是本机部署权威配置。
+## 单节点与固定主备
 
-### 唯一目标节点（最新 Skill 要求）
+- 默认只保存一个 `expected_node`。节点必须是用户明确指定的具体叶子，不能是 DIRECT/REJECT/PASS 或自动组。
+- 只有用户明确要求自动兜底时，才启用一个 `primary_node`、一个 `secondary_node` 和一个 Selector `ai_group`。两个节点必须不同，Selector 必须且只能直接包含这两个具体叶子；失败阈值限制为 2-5，严格探测间隔限制为 5-60 秒。
+- 任一时刻仍只有一个 `expected_node`。`active_role`、`expected_node` 与 Selector 实际叶子必须一致。
+- 主节点连续失败达阈值后才可切换。切换期间先置 `switching=true`、关闭 gate 管理的活动隧道，再切到备用并严格验证真实叶子、地区和 Anthropic 可达性。
+- 备用验证失败必须读回验证回滚；无法确认时保持 `blocked`。备用运行中失效只阻断，默认不自动回切，不选第三个节点。
 
-    优秀|【3x】中转|台湾hinet动态家宽01
+## 瞬时失败与明确不安全证据
 
-这是本机已有指定，不是其他机器的默认值。精确匹配完整名字；名字中的竖线不是列表分隔符。只接受单个 expected_node，不添加白名单、备用节点或按地区自动挑选。链式入口和 Selector 不算额外出口，但其最终叶子必须等于该目标。用户改选时替换原目标，重新校验并绑定，不能追加节点。
-
-Skill 要求运行中的 guard 与浏览器都只允许这一个叶子。若磁盘上的脚本仍有备用节点列表，维护时应收敛为单个 expected_node，并测试其他叶子均拒绝。不能把旧多节点实现当成现行规则。
-
-### 最近变更
-
-- 全局 → 规则模式，保留国内测试开发服务 DIRECT；Claude 专用入口独立绑定。
-- 用户最新要求：只指定一个最终节点，不添加白名单或备用出口；保留单跳、链式和 Selector 解析。更换节点须明确替换旧目标并重绑会话。
-- 固定公网 IP → CLI 同叶子且 TW 的新 IP 可更新；浏览器还有严格比较差异。
-- 短探测 → 多端点、有限缓存/宽限，Hook 35 秒、控制调用约 32 秒；失败阻止 Hook 操作，不是波动自动 kill CLI。
-- CLI 升级与保护入口分离；保留用户选定的 bypassPermissions，显式参数覆盖默认值。
-- 不设置禁用鼠标环境变量，TTY 清理与网络检测分离。
-- 只设置 Claude 的 BROWSER，保留正常 Chrome 用户资料；清账号不再作为维护默认步骤。
-- 2026-09-09：Seatbelt 不再拦截 shell/脚本/远端库；只钉 Claude/Anthropic 的 HTTP_PROXY 路径。规则入站的域名后缀由用户当场指定，不把某一台机器的公司域名写成默认值。改沙箱后必须重启 Claude。
+- 已有新鲜严格验证时，单次有界控制口超时、trace 超时或 Anthropic 临时不可达可保留当前唯一路由并立即复核；连续达到配置阈值才关门。
+- 叶子漂移、地区明确不符、TUN 关闭、IPv6 开启、主备角色/状态不一致不是可容忍的网络抖动，第一次就必须 fail closed。
+- 严格探测成功会清零快速与完整探测的连续失败计数。状态字段损坏或监控循环异常必须清除放行位、关闭活动隧道，再从关闭状态重试。
 
 ## 维护顺序
 
-1. ccg_audit.py 获取前置摘要；只读确认服务、监听端口、shell 解析。磁盘存在不代表运行中。
+1. 运行 `python3 scripts/ccg_audit.py` 获取只读摘要；确认真实命令、服务、监听端口和设置引用。
 2. 更新 Skill ≠ 部署；更新 CLI ≠ 重装保护；诊断 ≠ 改全局网络。
-3. 备份将改的具体非凭证配置，增量编辑；保留其他 Hook、权限、鼠标偏好、开发例外，禁止旧模板整份覆盖。
-4. 语法/离线模拟后再审计比较。重启 gate/CLI/浏览器须按授权说明影响。
-5. 只报必要脱敏状态，不显示真实公网 IP、内部服务地址、secret、Cookie 或正文。
-6. 分别交付变更、未变更、验证、限制；[保护边界](layers.md) 中的缺口不能写成已实现。
+3. 备份即将修改的具体非凭证配置，增量编辑；保留其他 Hook、权限、鼠标偏好、开发例外和普通浏览器资料。
+4. 语法/单测 → 文件比较 → 只读路由核对 → 无账号拒绝路径测试。重启 gate/CLI/浏览器前说明连接影响。
+5. 只报必要的脱敏状态，不显示真实公网 IP、控制器 secret、Cookie、凭证或请求正文。
+6. 分别交付变更、未变更、已验证和未验证边界；不能把模板能力写成某台机器已完成部署。
 
 ## 源码与使用副本
 
-本次找到源码位于 tanyu-skills/claude-code-guard，Grok 使用独立副本 ~/.grok/skills/claude-code-guard。用户给的 GitHub 地址不等于本地 origin；发布前检查 remote、状态、授权，不能自动提交到其他远端。
+本仓库是通用 Skill 源码。安装工具可能复制或符号链接到 `~/.agents/skills/`、`~/.claude/skills/`、`~/.codex/skills/` 或 `~/.grok/skills/`。发布前核对真实 Git remote、工作区与已安装副本，不要把某台机器的节点名、端口、私有域名或凭证提交到公开仓库。
 
-只同步本次修改的 Skill 文件，保留副本其他文件，比较摘要。更新 Skill 不重启 Grok/Claude/Clash/浏览器。新任务可读新版；已加载旧 Skill 的任务需重新读取，不保证自动热更新。
+更新仓库不会自动重启 Claude、Grok、Clash 或浏览器。已加载旧 Skill 的会话需重新读取，不保证热更新。

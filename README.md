@@ -1,6 +1,6 @@
 # Claude Code Guard
 
-Claude Code Guard 是一个给 Claude Code / Claude CLI 使用的本地网络保护 Skill：把发往 Claude、Anthropic 的 HTTP(S) 请求送入专用代理入口，并绑定到用户明确选择的**一个最终出口节点**。
+Claude Code Guard 是一个给 Claude Code / Claude CLI 使用的本地网络保护 Skill：把发往 Claude、Anthropic 的 HTTP(S) 请求送入专用代理入口，并绑定到当前唯一生效的最终出口。默认使用单节点；只有用户明确指定时，才启用一主一备的 fail-closed 自动故障切换。
 
 它解决的是“路由约束与可核验维护”，不是绕过服务条款，也不保证不封号、绝对不泄漏或不同账号无法关联。不要把节点名、住宅 IP、旗帜或第三方评分当成官方认可。
 
@@ -10,12 +10,12 @@ Claude Code Guard 是一个给 Claude Code / Claude CLI 使用的本地网络保
 
 | 流量 | 怎么走 |
 | --- | --- |
-| Claude Code / CLI → `claude.ai` / `api.anthropic.com` | `HTTP_PROXY` → 本地 gate `:7899` → 专用入站 `:7898` → **唯一指定叶子** |
+| Claude Code / CLI → `claude.ai` / `api.anthropic.com` | `HTTP_PROXY` → 本地 gate `:7899` → 专用入站 `:7898` → **当前唯一生效叶子** |
 | 用户授权的公司/国内 HTTP 域名 | gate → 规则入站 `:7897` → Clash Rule（通常 DIRECT） |
 | shell / 脚本 / MySQL / Redis / MongoDB / git | **真实网络**，由 Clash 规则与系统网络处理 |
 | Mihomo / Clash 控制口 | 沙箱拒绝，避免进程自行切换出口 |
 
-不要做节点白名单、备用出口或自动轮换。只指定**一个**完整叶子名。
+默认只指定**一个**完整叶子名。显式启用主备时，也只允许预先指定的一个主节点和一个备用节点；任一时刻仍只有一个最终叶子生效。不做节点白名单、负载均衡、随机选择或多节点轮换。
 
 ## 工作原理
 
@@ -27,7 +27,7 @@ Claude Code / Claude CLI
         │
         ▼
 Clash / Mihomo 专用入口（示例 :7898）
-        │ 只解析到一个最终叶子
+        │ 只解析到当前一个最终叶子
         ▼
 用户选定的出口节点
 ```
@@ -64,7 +64,7 @@ Grok 使用 `~/.grok/skills/claude-code-guard`；Windows 使用 `%USERPROFILE%\\
 不要复制别人的节点名、端口或公司域名。先打开你自己的梯子。
 
 1. Clash / Mihomo 使用**规则模式**；通常开启 TUN、关闭 IPv6。mixed-port 作为普通规则入口（示例 `:7897`）。
-2. 增加一条**专用 mixed 入站**（示例 `:7898`，只听 `127.0.0.1`，UDP 关），`proxy` 填你选定的那一个叶子完整名字。
+2. 增加一条**专用 mixed 入站**（示例 `:7898`，只听 `127.0.0.1`，UDP 关）。单节点时 `proxy` 填选定叶子；主备时填一个专用 Selector 路由根，由 gate 只在受控切换期间修改它。
 3. Claude 的 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 指向 gate（示例 `:7899`）。不要把国内库主机写进 `NO_PROXY` 来“绕过保护”——数据库客户端本来就不走 HTTP 代理。
 4. Seatbelt 放行普通出站，**只拒绝** Clash 控制 socket。旧模板若 `deny network-outbound` 只放行 localhost，Go 的 MySQL/Redis/Mongo 会 `EPERM`。改沙箱后**必须重启 Claude**，旧进程还是旧规则。
 5. 启动前或发 prompt 时校验：当前叶子等于指定叶子；同叶子的动态 IP 可以更新，换叶子就拦截。失败拦截这一次请求，不要杀进程。
@@ -94,11 +94,11 @@ python3 scripts/ccg_detect.py --list
 
 探测结果可能包含控制器 secret、内部地址或当前节点信息，不要原样贴到公开 issue、聊天或网页。
 
-### 2. 只选择一个最终叶子
+### 2. 默认单节点，可显式指定固定主备
 
-从你自己的 Clash/Mihomo 配置和运行时状态中选出一个完整叶子名，例如 `TW-Home-01`。不要把节点列表、备用节点或“自动选择”当成绑定目标。Selector 可以作为路由根，但最终解析出的叶子必须等于这个唯一目标。
+从你自己的 Clash/Mihomo 配置和运行时状态中选出一个完整叶子名，例如 `TW-Home-01`。默认不把节点列表或“自动选择”当成绑定目标。Selector 可以作为路由根，但最终解析出的叶子必须等于当前唯一目标。
 
-固定的是叶子名称，不等于公网 IP 永久不变；同一叶子的动态 IP 可以更新。换叶子时要明确替换旧目标、重新绑定并重新验收，不能追加一个备用出口。
+固定的是叶子名称，不等于公网 IP 永久不变；同一叶子的动态 IP 可以更新。换叶子时要明确替换旧目标、重新绑定并重新验收。只有你明确要求“主挂后自动切备用”时，才再指定一个不同的具体备用叶子和一个专用 Selector；不能追加第三个节点。
 
 ### 3. 配置分层入口
 
@@ -114,11 +114,23 @@ python3 scripts/ccg_detect.py --list
 
 ### 4. 运行安装器前先读差异
 
-仓库里的 `ccg_install.py`、`ccg_guard.py`、`ccg_gate.py` 是跨平台旧模板，不等同于某台机器上已经运行的保护部署。新环境可以先让安装器输出建议，但不要把成功退出当成“网络保护已完成”：
+仓库里的 `ccg_install.py`、`ccg_guard.py`、`ccg_gate.py`、`ccg_failover.py` 是跨平台通用模板，不等同于某台机器上已经运行的保护部署。新环境可以先让安装器输出建议，但不要把成功退出当成“网络保护已完成”：
 
 ```bash
 python3 scripts/ccg_install.py --node "你的唯一叶子名" --region TW
 ```
+
+显式主备需要两个具体叶子和一个**恰好只包含它们**的 Selector：
+
+```bash
+python3 scripts/ccg_install.py \
+  --node "主节点完整名称" \
+  --secondary-node "备用节点完整名称" \
+  --ai-group "专用 Selector 名称" \
+  --region TW
+```
+
+主节点达到连续失败阈值后，gate 先封闸、关闭其管理的活动隧道，再切到预先指定的备用并严格核对实际叶子、地区和 Anthropic 可达性。失败阈值限制为 2-5，严格探测间隔限制为 5-60 秒；备用失效会保持阻断，默认不自动回切。已有新鲜严格验证时，单次有界控制口/trace/Anthropic 临时失败只保留当前路由并立即复核；连续达阈值才关门，而叶子、地区、TUN、IPv6 或主备状态异常仍第一次就关门。
 
 它不会自动合并 Mihomo 配置，也不会自动部署 listener 或服务。已有 `~/.local/claude-guard/`、`~/.claude-guard/`、Hook 或启动器时，先维护现有实现。
 
@@ -165,7 +177,7 @@ python3 scripts/test_skill.py
 
 ### 想加备用节点自动切换
 
-本项目故意不支持这种默认配置。备用节点会把失败时的路由边界变得不可见；需要换出口时，明确替换唯一目标并重新核对、重新绑定。
+可以，但不是默认行为。必须显式指定一个主节点、一个备用节点和一个 Selector 路由根；主备都是具体叶子。该能力不会建立白名单、随机轮换或自动回切。
 
 ### 想把所有流量都经过 Claude 专用入口
 
@@ -175,7 +187,8 @@ python3 scripts/test_skill.py
 
 - [ ] Skill 已安装，且新会话能读取 `/claude-code-guard`。
 - [ ] 已确认本机真实 wrapper、Hook、沙箱、代理入口和控制器。
-- [ ] 只有一个完整 `expected_node`，没有备用节点或自动轮换。
+- [ ] 任一时刻只有一个完整 `expected_node`；未显式启用主备时没有备用节点或自动轮换。
+- [ ] 启用主备时，只有一主一备，Selector 真实叶子、`active_role` 和 `expected_node` 一致，且切换/回滚/备用失效路径已验证。
 - [ ] Claude/Anthropic 走 `HTTP_PROXY` → gate → 专用入口。
 - [ ] shell、脚本、git、数据库未被错误送进专用入口。
 - [ ] 错误节点、错误地区、控制器失联和入口断开会拒绝相应操作。
