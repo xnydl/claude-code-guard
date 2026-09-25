@@ -15,6 +15,7 @@ import re
 import socket
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -163,21 +164,43 @@ class AuditTests(unittest.TestCase):
 class DetectTests(unittest.TestCase):
     def test_current_user_service_socket_precedes_legacy_tmp_paths(self):
         service_socket = "/var/run/clash-verge-service/users/503/verge-mihomo.sock"
+        legacy_socket = "/tmp/verge/verge-mihomo.sock"
         seen_patterns = []
 
         def fake_glob(pattern):
             seen_patterns.append(pattern)
-            return [pattern] if pattern == service_socket else []
+            return [pattern] if pattern in (service_socket, legacy_socket) else []
 
         with patch.object(ccg_detect, "os_name", return_value="darwin"), \
              patch.object(ccg_detect.os, "getuid", return_value=503), \
              patch.object(ccg_detect, "glob", side_effect=fake_glob), \
-             patch.object(ccg_detect.Path, "is_socket", return_value=True):
+             patch.object(ccg_detect.Path, "is_socket", return_value=True), \
+             patch.object(ccg_detect.Path, "stat", return_value=SimpleNamespace(st_uid=503)):
             candidates = ccg_detect.unix_socket_candidates()
 
-        self.assertEqual(candidates, [service_socket])
+        self.assertEqual(candidates, [service_socket, legacy_socket])
         self.assertEqual(seen_patterns[0], service_socket)
         self.assertFalse(any("/users/*/" in pattern for pattern in seen_patterns))
+
+    def test_current_user_legacy_socket_works_without_service_socket(self):
+        legacy_socket = "/tmp/verge/verge-mihomo.sock"
+
+        with patch.object(ccg_detect, "os_name", return_value="darwin"), \
+             patch.object(ccg_detect.os, "getuid", return_value=503), \
+             patch.object(ccg_detect, "glob", side_effect=lambda pattern: [legacy_socket] if pattern == legacy_socket else []), \
+             patch.object(ccg_detect.Path, "is_socket", return_value=True), \
+             patch.object(ccg_detect.Path, "stat", return_value=SimpleNamespace(st_uid=503)):
+            self.assertEqual(ccg_detect.unix_socket_candidates(), [legacy_socket])
+
+    def test_legacy_socket_owned_by_another_uid_is_excluded(self):
+        other_user_socket = "/tmp/other-clash.sock"
+
+        with patch.object(ccg_detect, "os_name", return_value="darwin"), \
+             patch.object(ccg_detect.os, "getuid", return_value=503), \
+             patch.object(ccg_detect, "glob", side_effect=lambda pattern: [other_user_socket] if pattern == "/tmp/*clash*.sock" else []), \
+             patch.object(ccg_detect.Path, "is_socket", return_value=True), \
+             patch.object(ccg_detect.Path, "stat", return_value=SimpleNamespace(st_uid=504)):
+            self.assertEqual(ccg_detect.unix_socket_candidates(), [])
 
     def test_windows_does_not_resolve_unix_uid(self):
         with patch.object(ccg_detect, "os_name", return_value="windows"), \

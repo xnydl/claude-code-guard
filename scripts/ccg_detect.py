@@ -154,9 +154,11 @@ def clash_config_candidates() -> list[Path]:
 def unix_socket_candidates() -> list[str]:
     if os_name() == "windows":
         return []
+    current_uid = os.getuid()
     # Clash Verge service mode keeps each user's controller under that user's
-    # numeric UID. Never glob across other users' controller sockets.
-    service_socket = f"/var/run/clash-verge-service/users/{os.getuid()}/verge-mihomo.sock"
+    # numeric UID. Legacy globs are retained, but candidates owned by another
+    # user are discarded before any controller probe can reach them.
+    service_socket = f"/var/run/clash-verge-service/users/{current_uid}/verge-mihomo.sock"
     patterns = (
         service_socket,
         "/tmp/verge/verge-mihomo.sock",
@@ -169,7 +171,14 @@ def unix_socket_candidates() -> list[str]:
     found: list[str] = []
     for pattern in patterns:
         for item in glob(pattern):
-            if item not in found and Path(item).is_socket():
+            path = Path(item)
+            try:
+                is_current_user_socket = path.is_socket() and path.stat().st_uid == current_uid
+            except OSError:
+                # The socket may disappear between glob and stat, or be
+                # unreadable. Detection is best-effort, so skip it safely.
+                continue
+            if item not in found and is_current_user_socket:
                 found.append(item)
     return found
 
