@@ -154,7 +154,11 @@ def clash_config_candidates() -> list[Path]:
 def unix_socket_candidates() -> list[str]:
     if os_name() == "windows":
         return []
+    # Clash Verge service mode keeps each user's controller under that user's
+    # numeric UID. Never glob across other users' controller sockets.
+    service_socket = f"/var/run/clash-verge-service/users/{os.getuid()}/verge-mihomo.sock"
     patterns = (
+        service_socket,
         "/tmp/verge/verge-mihomo.sock",
         "/tmp/verge/*.sock",
         "/tmp/*clash*.sock",

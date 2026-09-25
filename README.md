@@ -76,6 +76,8 @@ Grok 使用 `~/.grok/skills/claude-code-guard`；Windows 使用 `%USERPROFILE%\\
 python3 scripts/ccg_detect.py --list
 ```
 
+探测器会优先尝试 Clash Verge Rev 当前用户的 service-mode socket（`/var/run/clash-verge-service/users/<uid>/verge-mihomo.sock`），再兼容旧 `/tmp` 路径；它不会扫描其他用户的控制口。
+
 已有保护环境先审计，不要重跑安装器覆盖：
 
 ```bash

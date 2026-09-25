@@ -13,6 +13,8 @@
 | 代理链 | CLI → gate → 专用上游。端口是现场配置，不是跨机器默认 |
 | Mihomo listener | loopback、UDP 关闭；单节点指向具体叶子，主备模式指向专用 Selector |
 
+Clash Verge Rev 的控制 socket 会随运行模式改变。当前用户的 service mode 通常位于 `/var/run/clash-verge-service/users/<uid>/verge-mihomo.sock`，旧版用户进程模式可能使用 `/tmp/verge/verge-mihomo.sock`。`ccg_detect.py` 优先按当前用户 UID 探测 service socket，再回退兼容旧路径；不扫描、不连接其他用户的控制口。不要把某台机器的 UID 硬编码到通用配置。
+
 ## 单节点与固定主备
 
 - 默认只保存一个 `expected_node`。节点必须是用户明确指定的具体叶子，不能是 DIRECT/REJECT/PASS 或自动组。

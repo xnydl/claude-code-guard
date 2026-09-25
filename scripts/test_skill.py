@@ -22,6 +22,7 @@ sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import ccg_audit
+import ccg_detect
 import ccg_failover
 import ccg_gate
 import ccg_guard
@@ -157,6 +158,31 @@ class AuditTests(unittest.TestCase):
             for data in ("broken", "[]", '{"env": []}'):
                 path.write_text(data, encoding="utf-8")
                 self.assertIn("error", ccg_audit.settings_summary(path))
+
+
+class DetectTests(unittest.TestCase):
+    def test_current_user_service_socket_precedes_legacy_tmp_paths(self):
+        service_socket = "/var/run/clash-verge-service/users/503/verge-mihomo.sock"
+        seen_patterns = []
+
+        def fake_glob(pattern):
+            seen_patterns.append(pattern)
+            return [pattern] if pattern == service_socket else []
+
+        with patch.object(ccg_detect, "os_name", return_value="darwin"), \
+             patch.object(ccg_detect.os, "getuid", return_value=503), \
+             patch.object(ccg_detect, "glob", side_effect=fake_glob), \
+             patch.object(ccg_detect.Path, "is_socket", return_value=True):
+            candidates = ccg_detect.unix_socket_candidates()
+
+        self.assertEqual(candidates, [service_socket])
+        self.assertEqual(seen_patterns[0], service_socket)
+        self.assertFalse(any("/users/*/" in pattern for pattern in seen_patterns))
+
+    def test_windows_does_not_resolve_unix_uid(self):
+        with patch.object(ccg_detect, "os_name", return_value="windows"), \
+             patch.object(ccg_detect.os, "getuid", side_effect=AssertionError("unexpected UID lookup")):
+            self.assertEqual(ccg_detect.unix_socket_candidates(), [])
 
 
 class InstallerTests(unittest.TestCase):
