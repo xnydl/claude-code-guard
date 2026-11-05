@@ -13,7 +13,7 @@ $env:https_proxy = $env:HTTP_PROXY
 $env:all_proxy = $env:HTTP_PROXY
 $env:NO_PROXY = "127.0.0.1,localhost,::1"
 $env:no_proxy = $env:NO_PROXY
-$env:BROWSER = Join-Path $guardDir "camoufox.ps1"
+$env:BROWSER = Join-Path $guardDir "fingerprint-chromium.ps1"
 $real = if ($env:CLAUDE_REAL_BIN) { $env:CLAUDE_REAL_BIN } else { "claude" }
 Write-Host "OK network-gate=localhost:$gate os=windows (no process sandbox)"
 & $real @args

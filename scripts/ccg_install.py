@@ -61,7 +61,7 @@ def write_settings(state: dict) -> Path:
     env = data.setdefault("env", {})
     gate = int(state["gate_port"])
     tz = state.get("timezone") or "Asia/Taipei"
-    browser = str(Path(state["install_dir"]) / ("camoufox.ps1" if os_name() == "windows" else "camoufox.sh"))
+    browser = str(Path(state["install_dir"]) / ("fingerprint-chromium.ps1" if os_name() == "windows" else "fingerprint-chromium.sh"))
     env.update(
         {
             "LANG": "en_US.UTF-8",
@@ -114,13 +114,20 @@ def copy_runtime(dest: Path) -> None:
         "claude-network.sb",
         "wrapper.sh",
         "wrapper.ps1",
-        "camoufox.sh",
-        "camoufox.ps1",
+        "ccg_browser.py",
+        "fingerprint-chromium.sh",
+        "fingerprint-chromium.ps1",
     )
     for name in names:
         src = HERE / name
         if src.is_file():
-            shutil.copy2(src, dest / name)
+            target = dest / name
+            shutil.copy2(src, target)
+            # Web/ZIP distribution may drop the executable bit. BROWSER is
+            # invoked as a program, so restore owner execution for shell
+            # entries without granting additional group/world permissions.
+            if os.name != "nt" and target.suffix == ".sh":
+                target.chmod(target.stat().st_mode | 0o100)
     hook_dir = claude_home() / "hooks"
     hook_dir.mkdir(parents=True, exist_ok=True)
     for name in ("ccg_detect.py", "ccg_guard.py", "hook_request.py", "hook_sysinfo.py"):
@@ -291,7 +298,8 @@ def main() -> int:
         print(f"2. 用 {install_dir / 'wrapper.ps1'} 启动 Claude（Windows 无进程沙箱）")
     else:
         print(f"2. 把 {install_dir / 'wrapper.sh'} 放到 PATH 里当作 claude")
-    print("3. 登录只走指纹浏览器脚本，不要用系统 Chrome / Edge / Safari")
+    print("3. 登录只走 Fingerprint Chromium Guarded 入口；此模板不安装完整浏览器启动器。")
+    print("   未部署受管应用/GeoIP/定位覆盖或平台适配时保持阻断，按 references/fingerprint.md 验收。")
     return 0
 
 

@@ -1,6 +1,6 @@
 # 维护流程与部署识别
 
-先核对目标机器的 wrapper、网络门、Hook、Seatbelt、settings 与 Camoufox 启动器。以下是识别项，不是某台机器已完成抓包、断网或登录验收的证明。
+先核对目标机器的 wrapper、网络门、Hook、Seatbelt、settings 与 Fingerprint Chromium Guarded 启动器。以下是识别项，不是某台机器已完成抓包、断网或登录验收的证明。
 
 | 项目 | 维护时要确认的内容 |
 | --- | --- |
@@ -12,6 +12,8 @@
 | 状态 | 新模板使用 `~/.claude-guard/state.json`；不要把磁盘文件存在当成运行中证据 |
 | 代理链 | CLI → gate → 专用上游。端口是现场配置，不是跨机器默认 |
 | Mihomo listener | loopback、UDP 关闭；单节点指向具体叶子，主备模式指向专用 Selector |
+| 浏览器 | 受保护 Chromium 应用、`BROWSER` 分发器、固定 profile/seed、离线 GeoIP 与私有定位管道；见 [浏览器流程](fingerprint.md) |
+| DNS | 正在生效的 TUN/解析配置、持久化订阅扩展、代理 DoH 连接链、加密引导例外；见 [Clash DNS](dns.md) |
 
 Clash Verge Rev 的控制 socket 会随运行模式改变。当前用户的 service mode 通常位于 `/var/run/clash-verge-service/users/<uid>/verge-mihomo.sock`，旧版用户进程模式可能使用 `/tmp/verge/verge-mihomo.sock`。`ccg_detect.py` 优先按当前用户 UID 探测 service socket，再回退兼容旧路径；不扫描、不连接其他用户的控制口。不要把某台机器的 UID 硬编码到通用配置。
 
@@ -28,6 +30,12 @@ Clash Verge Rev 的控制 socket 会随运行模式改变。当前用户的 serv
 - 已有新鲜严格验证时，单次有界控制口超时、trace 超时或 Anthropic 临时不可达可保留当前唯一路由并立即复核；连续达到配置阈值才关门。
 - 叶子漂移、地区明确不符、TUN 关闭、IPv6 开启、主备角色/状态不一致不是可容忍的网络抖动，第一次就必须 fail closed。
 - 严格探测成功会清零快速与完整探测的连续失败计数。状态字段损坏或监控循环异常必须清除放行位、关闭活动隧道，再从关闭状态重试。
+
+## 已放开的沙箱出站
+
+仓库沙箱与当前本机部署均采用 `(allow default)`，只对 Mihomo 控制 Unix socket 添加网络拒绝。shell、脚本、git、数据库普通出站不再被旧的“仅 localhost”规则阻断；Claude HTTP(S) 依旧依靠 wrapper → gate → 专用入站。不要把维护误写为关闭整个沙箱或移除控制口保护。
+
+现有本机策略还明确注明 IPv6 不由 Seatbelt 的这两条 socket 规则过滤，仍依靠网卡、Clash 设置和启动检查。维护时分别核对，不把沙箱当作系统级 DNS/IPv6 防火墙。仓库更新不重新部署或放宽目标机器权限。
 
 ## 维护顺序
 

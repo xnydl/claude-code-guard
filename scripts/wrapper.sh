@@ -11,7 +11,7 @@ GATE="$("$PYTHON" -c 'from pathlib import Path; import json; p=Path.home()/".cla
 export HTTP_PROXY="http://localhost:${GATE}" HTTPS_PROXY="http://localhost:${GATE}" ALL_PROXY="http://localhost:${GATE}"
 export http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" all_proxy="$ALL_PROXY"
 export NO_PROXY="127.0.0.1,localhost,::1" no_proxy="$NO_PROXY"
-export BROWSER="${GUARD_DIR}/camoufox.sh"
+export BROWSER="${GUARD_DIR}/fingerprint-chromium.sh"
 SB="${GUARD_DIR}/claude-network.sb"
 if [[ -x /usr/bin/sandbox-exec && -f "$SB" ]]; then
   exec /usr/bin/sandbox-exec -f "$SB" "$REAL" "$@"

@@ -3,7 +3,7 @@
 先识别 OS、Claude 命令解析、wrapper/启动服务、监听端口、代理客户端和控制器；不凭安装路径或 UI 推断进程状态。探测不自动改系统代理、规则或节点。
 
 - macOS + Mihomo：查活动配置/控制器，确认专用入站 proxy 的最终叶子、TUN、IPv6/DNS。单跳和链式都以实际路由为准。
-- Windows：识别 Clash/v2rayN/sing-box 等，不照搬 launchd、Unix socket 或 sandbox-exec。代理变量不是防火墙，出站限制要独立验证。
+- Windows：本次适配仅针对 Clash/Mihomo；不照搬 launchd、Unix socket 或 sandbox-exec。探测器识别其他客户端不代表本流程已适配；代理变量不是防火墙，出站限制要独立验证。
 - 只有 SOCKS/HTTP 端口：只能检测端口/出口，不能自动验证最终节点。报告能力缺口，不伪造身份。
 - 控制器鉴权失败、配置缺失、链路不可解析：不能拿空 JSON 或旧状态冒充核验。探测输出可能包含 secret，不原样分享。
 
@@ -15,8 +15,10 @@
 | test_skill.py | 离线验证，不访问账号或运行中配置 |
 | ccg_detect.py --list | 旧跨平台探测辅助，结果仍需核对 |
 | ccg_install.py / ccg_guard.py / ccg_gate.py / ccg_failover.py | 通用模板，安装至 ~/.claude-guard/；默认单节点，可显式启用固定主备；不能自动证明某台机器已正确部署 |
-| wrapper.sh/.ps1、camoufox.sh/.ps1 | 旧通用配套，不能替换现用持久化启动器 |
-| claude-wrapper.sh、claude-network-gate.py、claude-camoufox.sh、config.example.env | macOS 样例。gate 可用 `CCG_RULES_HOST_SUFFIXES` 把授权域名送到规则入站；沙箱样例放行 shell/数据库。不能覆盖已有 ~/.local/claude-guard 部署 |
+| wrapper.sh/.ps1、fingerprint-chromium.sh/.ps1、ccg_browser.py | 指向 Fingerprint Chromium Guarded；macOS 只分发到已部署应用，不安装浏览器。其他平台未适配时明确阻断 |
+| camoufox.sh/.ps1、claude-camoufox.sh | 仅兼容旧文件名，转交 Chromium，不再启动 Camoufox；新配置不引用 |
+| claude-wrapper.sh、claude-network-gate.py、config.example.env | macOS 样例，BROWSER 指向 claude-fingerprint-chromium。gate 可用 `CCG_RULES_HOST_SUFFIXES` 把授权域名送到规则入站；沙箱样例放行 shell/数据库。不能覆盖已有 ~/.local/claude-guard 部署 |
+| clash-proxy-dns.js | 可选的单叶子订阅 DNS 扩展；不安装防火墙、不改流量规则/节点/系统 DNS，部署前读 [DNS 限制](dns.md) |
 
 安装器仅输出 listener YAML 建议，不会自动合并 Mihomo 配置；选定端口不代表入口已存在。默认仍使用单个 `expected_node`。同时提供 `--secondary-node` 与 `--ai-group` 时，才写入固定主备状态；安装器会验证两个名字不同、Selector 恰好只直接包含这两个具体叶子、当前已解析到主节点，并通过对当前主节点的幂等选择与读回确认控制器可写；同时拒绝 DIRECT/REJECT/PASS，并把失败阈值限制为 2-5、严格探测间隔限制为 5-60 秒。模板与 `~/.local/claude-guard/` 等既有部署不能混用描述。
 
@@ -38,3 +40,5 @@
 - 模拟备用探测失败、控制器失联与回滚读回不一致；最后一种必须保持 `blocked`，不能因为状态文件残留旧主节点而误放行。
 - 备用运行中失败要阻断，但默认不自动回切。未做真实断网与长连接测试时必须标注未验证。
 - 故障转移使用进程级 advisory lock 阻止并发切换；进程崩溃或被终止时内核会释放锁。锁文件本身可以长期存在，不能把“文件存在”当成仍被占用；恢复判断以能否取得锁和状态机读回为准。
+
+浏览器的节点/IP、GeoIP 时区定位、DNS/UDP 和独立 profile 统一按 [Fingerprint Chromium Guarded](fingerprint.md) 处理。入口分发器不包含完整受管浏览器实现；缺少启动器/GeoIP/定位覆盖时不能只把 BROWSER 换成原始 Chromium 就交付，也不能回退 Camoufox。

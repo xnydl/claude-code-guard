@@ -65,11 +65,12 @@ def audit(home: Path, claude_dir: Path | None = None,
     local = home / ".local/claude-guard"
     portable = home / ".claude-guard"
     files = {}
-    for name in ("bin/claude", "bin/claude-camoufox", "bin/claude-network-gate.py",
+    for name in ("bin/claude", "bin/claude-fingerprint-chromium", "bin/claude-network-gate.py",
                  "claude-network.sb"):
         files["local/" + name] = file_summary(local / name)
     for name in ("ccg_guard.py", "ccg_gate.py", "wrapper.sh", "wrapper.ps1",
-                 "hook_request.py", "claude-network.sb"):
+                 "hook_request.py", "claude-network.sb", "ccg_browser.py",
+                 "fingerprint-chromium.sh", "fingerprint-chromium.ps1"):
         files["portable/" + name] = file_summary(portable / name)
     for name in ("network-killswitch.sh", "network-request-hook.sh", "system-info-guard.sh",
                  "hook_request.py", "hook_sysinfo.py"):
