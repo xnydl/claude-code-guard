@@ -9,8 +9,12 @@
 | HTTP gate | 默认代理经专用入站转发；新版主备模板持续探测并在切换/失效时关闭其管理的活动隧道 | 解密 HTTPS、证明所有绕过 gate 的流量、替代 TUN/规则核验 |
 | Mihomo 专用入站 | 与普通规则入口分离、绑定出口 | 同名节点背后服务器未变、地区绝对可信 |
 | macOS Seatbelt | 禁止改 Mihomo 控制口。Shell/脚本/数据库走真实网络 | 子进程直连 Anthropic、IPv6 旁路；依赖 HTTP_PROXY + Clash 规则 + TUN |
-| 浏览器监控 | 周期验证，失败关闭专用 context | 零延迟、逐包验证、与 CLI 动态 IP 行为完全一致 |
+| Chromium 浏览器监控 | 独立 relay 新连接检查/周期复核，失败关闭该实例；GeoIP 与私有定位管道见浏览器流程 | 零延迟、逐包验证、与 CLI 动态 IP 行为完全一致 |
 | 工具信息 Hook | 匹配工具调用的文本规则 | 拦截原生 os.*、系统调用或所有子进程的信息访问 |
+
+上表之前还有一个入口前提：交互 shell 中的 `claude` 必须解析到 guard wrapper，或解析到一个已审计、自身不发网络请求且最终 `exec` guard wrapper 的 shim。要检查实际 PATH 顺序与 shim 内容，而不是只查 wrapper 文件是否存在。
+
+浏览器已切换为 [Fingerprint Chromium Guarded](fingerprint.md)，其独立 relay/定位控制不同于下述 CLI gate。不能把浏览器的新连接检查能力套用到 CLI，或仅因浏览器检测通过便声称 CLI 的全部流量通过验收。
 
 ## 典型 CLI 检查时序
 
@@ -47,6 +51,8 @@ Hook 35 秒、控制口调用约 32 秒。总预算还须计入排队/控制器�
 
 - 分别核对 macOS 活跃网络服务/路由、Mihomo IPv6/DNS/TUN、浏览器 DoH/WebRTC。Mihomo ipv6:false 不等于整个系统已关闭 IPv6。
 - DHCP DNS 列表不是泄漏直接证据；TUN 是否接管需路径证据，退出后可能回退 DHCP。不能凭开关保证无泄漏。
-- 获准 DIRECT 的国内服务使用国内解析器是分流预期；Claude 域名与浏览器旁路需另测。
+- DNS 策略需按授权区分：国内 DNS 分流可以是原策略；若明确启用全普通域名代理 DNS，`direct-nameserver` 也须经指定代理。网站流量 DIRECT 不代表其 DNS 必须直连；详见 [Clash DNS](dns.md)。
+- 浏览器代理解析、Clash DNS 上游、节点入口引导是不同路径。普通 Chrome 检测结果不能直接代表 CLI；空结果也不证明安全。系统级防直连/断路并未由该 DNS 模板实现。
+- TYPE64（SVCB）与 TYPE65（HTTPS）只作辅助验收：记录 resolver/路径和 Answer；若明确要求抑制，则空 Answer、NXDOMAIN 或 REFUSED 可记为已抑制。非空不等于泄漏，空结果不等于防封；不自动为检测页变绿屏蔽这两类记录。
 - 不为修 Claude 清空全局 DNS、改所有网卡或删系统配置。记录旧值、限定改动、提供恢复方式。
 - 不把第三方“纯净度/信任分”当账号安全保证。
