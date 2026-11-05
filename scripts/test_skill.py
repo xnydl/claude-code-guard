@@ -12,7 +12,9 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import socket
+import subprocess
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -23,6 +25,7 @@ sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import ccg_audit
+import ccg_browser
 import ccg_detect
 import ccg_failover
 import ccg_gate
@@ -209,6 +212,33 @@ class DetectTests(unittest.TestCase):
 
 
 class InstallerTests(unittest.TestCase):
+    def test_new_settings_choose_chromium_on_each_platform(self):
+        for system, filename in (("macos", "fingerprint-chromium.sh"),
+                                 ("windows", "fingerprint-chromium.ps1")):
+            with self.subTest(system=system), \
+                 tempfile.TemporaryDirectory(prefix="ccg-browser-install-test-") as folder:
+                root = Path(folder)
+                state = {"install_dir": str(root / "guard"), "gate_port": 7899,
+                         "timezone": "Asia/Taipei"}
+                with patch.object(ccg_install, "claude_home", return_value=root / "claude"), \
+                     patch.object(ccg_install, "os_name", return_value=system):
+                    result = json.loads(ccg_install.write_settings(state).read_text())
+                self.assertEqual(result["env"]["BROWSER"], str(root / "guard" / filename))
+                self.assertEqual(result["env"]["HTTPS_PROXY"], "http://localhost:7899")
+                self.assertEqual(result["env"]["TZ"], "Asia/Taipei")
+                self.assertFalse((root / "guard").exists())
+
+    def test_runtime_copy_includes_dispatcher_not_legacy_browser(self):
+        with tempfile.TemporaryDirectory(prefix="ccg-browser-copy-test-") as folder:
+            root = Path(folder)
+            dest = root / "guard"
+            with patch.object(ccg_install, "claude_home", return_value=root / "claude"):
+                ccg_install.copy_runtime(dest)
+            for name in ("ccg_browser.py", "fingerprint-chromium.sh", "fingerprint-chromium.ps1"):
+                self.assertEqual((dest / name).read_bytes(), (HERE / name).read_bytes())
+            self.assertFalse((dest / "camoufox.sh").exists())
+            self.assertFalse((dest / "camoufox.ps1").exists())
+
     def test_existing_layout_or_hooks_refused(self):
         with tempfile.TemporaryDirectory(prefix="ccg-install-test-") as folder:
             home = Path(folder)
@@ -922,6 +952,112 @@ class GateSafetyTests(unittest.TestCase):
         self.assertTrue(ccg_gate.safe_event.is_set())
 
 
+class BrowserTests(unittest.TestCase):
+    def test_only_official_https_urls(self):
+        for url in ("https://claude.ai/login", "https://api.anthropic.com/",
+                    "https://CLAUDE.COM:443/login"):
+            self.assertTrue(ccg_browser.valid_url(url), url)
+        for url in ("http://claude.ai/login", "https://claude.ai.evil.test/",
+                    "https://evilclaude.ai/", "https://evil.test/?next=claude.ai",
+                    "https://claude.ai@evil.test/", "https://user@claude.ai/",
+                    "https://claude.ai:444/", "https://claude.ai:bad/",
+                    "https://claude.ai/\n--no-proxy-server", "https://claude.ai/a b",
+                    "--proxy-server=direct://", "https://claude.ai/" + "x" * 8192):
+            self.assertFalse(ccg_browser.valid_url(url), url[:100])
+
+    def test_fragmented_ack_and_rejections(self):
+        valid = FakeSocket([b"O", b"K\n"])
+        ccg_browser.receive_ack(valid)
+        self.assertTrue(all(0 < item <= ccg_browser.ACK_TIMEOUT for item in valid.timeouts))
+        for chunks in ([b"OK"], [b"BLOCK private-token\n"], [b"OK\nBLOCK\n"], [b"x" * 512]):
+            with self.assertRaises(ccg_browser.BrowserError):
+                ccg_browser.receive_ack(FakeSocket(chunks))
+
+    def test_ack_has_one_total_deadline(self):
+        with patch.object(ccg_browser.time, "monotonic", side_effect=[0, 1, 48]):
+            with self.assertRaises(ccg_browser.BrowserError):
+                ccg_browser.receive_ack(FakeSocket([b"O", b"K\n"]))
+
+    def test_invalid_url_never_opens_anything_or_echoes_input(self):
+        secret = "DO_NOT_EMIT_PRIVATE_LOGIN_TOKEN"
+        with patch.object(ccg_browser, "open_guarded") as open_browser, \
+             contextlib.redirect_stderr(io.StringIO()) as output:
+            self.assertEqual(ccg_browser.main(["https://evil.test/" + secret]), 78)
+            self.assertNotIn(secret, output.getvalue())
+            open_browser.assert_not_called()
+
+    def test_unsupported_platform_has_no_fallback(self):
+        with patch.object(ccg_browser.platform, "system", return_value="Windows"), \
+             patch.object(ccg_browser.subprocess, "run") as run, \
+             patch.object(ccg_browser, "deliver") as deliver, \
+             contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(ccg_browser.main(["https://claude.ai/login"]), 78)
+            run.assert_not_called()
+            deliver.assert_not_called()
+
+    def test_reuse_guarded_browser_without_launching_another(self):
+        with tempfile.TemporaryDirectory(prefix="ccg-browser-reuse-test-") as folder:
+            home = Path(folder)
+            (home / "Applications/Fingerprint Chromium Guarded.app").mkdir(parents=True)
+            root = home / "Library/Application Support/Fingerprint Chromium Guarded"
+            root.mkdir(mode=0o700, parents=True)
+            with patch.object(ccg_browser.Path, "home", return_value=home), \
+                 patch.object(ccg_browser.platform, "system", return_value="Darwin"), \
+                 patch.object(ccg_browser, "deliver") as deliver, \
+                 patch.object(ccg_browser.subprocess, "run") as run:
+                self.assertEqual(ccg_browser.main(["https://claude.ai/login"]), 0)
+                deliver.assert_called_once_with(root, "https://claude.ai/login")
+                run.assert_not_called()
+
+    def test_cold_start_launches_guard_app_without_secret_argv(self):
+        with tempfile.TemporaryDirectory(prefix="ccg-browser-start-test-") as folder:
+            home = Path(folder)
+            app = home / "Applications/Fingerprint Chromium Guarded.app"
+            app.mkdir(parents=True)
+            root = home / "Library/Application Support/Fingerprint Chromium Guarded"
+            root.mkdir(mode=0o700, parents=True)
+            url = "https://claude.ai/login?token=PRIVATE_FIXTURE_TOKEN"
+            with patch.object(ccg_browser.Path, "home", return_value=home), \
+                 patch.object(ccg_browser.platform, "system", return_value="Darwin"), \
+                 patch.object(ccg_browser, "deliver", side_effect=[FileNotFoundError(), None]), \
+                 patch.object(ccg_browser.subprocess, "run") as run:
+                run.return_value.returncode = 0
+                self.assertEqual(ccg_browser.main([url]), 0)
+                self.assertEqual(run.call_args.args[0], ["/usr/bin/open", "-n", "-a", str(app)])
+                self.assertNotIn("PRIVATE_FIXTURE_TOKEN", str(run.call_args))
+
+    def test_rejection_does_not_fall_back_or_echo_ipc_text(self):
+        with tempfile.TemporaryDirectory(prefix="ccg-browser-refuse-test-") as folder:
+            home = Path(folder)
+            (home / "Applications/Fingerprint Chromium Guarded.app").mkdir(parents=True)
+            root = home / "Library/Application Support/Fingerprint Chromium Guarded"
+            root.mkdir(mode=0o700, parents=True)
+            with patch.object(ccg_browser.Path, "home", return_value=home), \
+                 patch.object(ccg_browser.platform, "system", return_value="Darwin"), \
+                 patch.object(ccg_browser, "deliver", side_effect=ccg_browser.BrowserError("guard blocked")), \
+                 patch.object(ccg_browser.subprocess, "run") as run, \
+                 contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(ccg_browser.main(["https://claude.ai/login"]), 78)
+                run.assert_not_called()
+
+    def test_private_ipc_paths_reject_files_symlinks_and_public_permissions(self):
+        with tempfile.TemporaryDirectory(prefix="ccg-browser-permissions-test-") as folder:
+            root = Path(folder)
+            ccg_browser.private_path(root)
+            root.chmod(0o755)
+            with self.assertRaises(ccg_browser.BrowserError):
+                ccg_browser.private_path(root)
+            root.chmod(0o700)
+            target = root / "file"
+            target.touch()
+            with self.assertRaises(ccg_browser.BrowserError):
+                ccg_browser.private_path(target, is_socket=True)
+            link = root / "link"
+            link.symlink_to(root, target_is_directory=True)
+            with self.assertRaises(ccg_browser.BrowserError):
+                ccg_browser.private_path(link)
+
+
 class GateRoutingTests(unittest.TestCase):
     def setUp(self):
         spec = importlib.util.spec_from_file_location(
@@ -942,6 +1078,59 @@ class GateRoutingTests(unittest.TestCase):
             self.assertTrue(self.gate.uses_clash_rules("example.com"))
             self.assertFalse(self.gate.uses_clash_rules("evilexample.com"))
             self.assertFalse(self.gate.uses_clash_rules("api.anthropic.com"))
+
+
+class DnsTemplateTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("node"), "Node.js is needed for DNS template tests")
+    def test_proxy_dns_offline_fixtures(self):
+        result = subprocess.run(
+            [shutil.which("node"), str(HERE / "test_clash_proxy_dns.js")],
+            capture_output=True, text=True, timeout=20, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
+class SandboxTests(unittest.TestCase):
+    def test_no_blanket_outbound_deny(self):
+        source = (HERE / "claude-network.sb").read_text(encoding="utf-8")
+        code = "\n".join(line.split(";", 1)[0] for line in source.splitlines())
+        self.assertRegex(code, r"\(allow\s+default\)")
+        self.assertNotRegex(code, r"\(deny\s+network-outbound\s*\)")
+
+    @unittest.skipUnless(sys.platform == "darwin" and Path("/usr/bin/sandbox-exec").is_file(),
+                         "macOS Seatbelt test; no live controller/network is used")
+    def test_local_tcp_and_unix_work_but_mock_controller_is_blocked(self):
+        client = """
+import errno, json, socket, sys
+family, target, denied = json.loads(sys.argv[1])
+with socket.socket(getattr(socket, family), socket.SOCK_STREAM) as connection:
+    connection.settimeout(2)
+    try:
+        connection.connect(tuple(target) if isinstance(target, list) else target)
+    except OSError as exc:
+        raise SystemExit(0 if denied and exc.errno in (errno.EPERM, errno.EACCES) else 90)
+    raise SystemExit(91 if denied else 0)
+"""
+        def check(family, target, denied):
+            result = subprocess.run(
+                ["/usr/bin/sandbox-exec", "-f", str(HERE / "claude-network.sb"),
+                 sys.executable, "-c", client, json.dumps([family, target, denied])],
+                capture_output=True, text=True, timeout=5, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+        # All endpoints are temporary fixtures, never the actual Clash socket.
+        with tempfile.TemporaryDirectory(prefix="ccg-sb-", dir="/tmp") as folder:
+            for filename, denied in (("ordinary.sock", False), ("verge-mihomo.sock", True)):
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+                    target = str(Path(folder) / filename)
+                    server.bind(target)
+                    server.listen(1)
+                    check("AF_UNIX", target, denied)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
+            server.bind(("127.0.0.1", 0))
+            server.listen(1)
+            check("AF_INET", list(server.getsockname()), False)
 
 
 class PackageTests(unittest.TestCase):

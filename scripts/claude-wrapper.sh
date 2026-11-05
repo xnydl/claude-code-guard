@@ -6,7 +6,7 @@ set -u
 
 readonly REAL_CLAUDE="${CLAUDE_REAL_BIN:-${HOME}/.local/bin/claude}"
 readonly GUARD="${HOME}/.claude/hooks/network-killswitch.sh"
-readonly CLAUDE_BROWSER="${HOME}/.local/claude-guard/bin/claude-camoufox"
+readonly CLAUDE_BROWSER="${HOME}/.local/claude-guard/bin/claude-fingerprint-chromium"
 readonly GUARD_LOG="${HOME}/Library/Logs/Claude Code/network-guard.log"
 readonly SANDBOX_EXEC="/usr/bin/sandbox-exec"
 readonly SANDBOX_PROFILE="${HOME}/.local/claude-guard/claude-network.sb"
