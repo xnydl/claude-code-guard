@@ -239,6 +239,25 @@ class InstallerTests(unittest.TestCase):
             self.assertFalse((dest / "camoufox.sh").exists())
             self.assertFalse((dest / "camoufox.ps1").exists())
 
+    @unittest.skipIf(os.name == "nt", "POSIX executable permission")
+    def test_runtime_copy_restores_browser_execution_after_web_upload(self):
+        with tempfile.TemporaryDirectory(prefix="ccg-browser-mode-test-") as folder:
+            root = Path(folder)
+            source = root / "source"
+            source.mkdir()
+            for name in ("fingerprint-chromium.sh", "ccg_browser.py", "ccg_detect.py",
+                         "ccg_guard.py", "hook_request.py", "hook_sysinfo.py"):
+                path = source / name
+                path.write_text("# offline fixture\n", encoding="utf-8")
+                path.chmod(0o600)
+            dest = root / "guard"
+            with patch.object(ccg_install, "HERE", source), \
+                 patch.object(ccg_install, "claude_home", return_value=root / "claude"):
+                ccg_install.copy_runtime(dest)
+            self.assertEqual((dest / "fingerprint-chromium.sh").stat().st_mode & 0o777, 0o700)
+            self.assertEqual((dest / "ccg_browser.py").stat().st_mode & 0o777, 0o600)
+            self.assertEqual((source / "fingerprint-chromium.sh").stat().st_mode & 0o777, 0o600)
+
     def test_existing_layout_or_hooks_refused(self):
         with tempfile.TemporaryDirectory(prefix="ccg-install-test-") as folder:
             home = Path(folder)

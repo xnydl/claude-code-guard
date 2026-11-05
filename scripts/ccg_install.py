@@ -121,7 +121,13 @@ def copy_runtime(dest: Path) -> None:
     for name in names:
         src = HERE / name
         if src.is_file():
-            shutil.copy2(src, dest / name)
+            target = dest / name
+            shutil.copy2(src, target)
+            # Web/ZIP distribution may drop the executable bit. BROWSER is
+            # invoked as a program, so restore owner execution for shell
+            # entries without granting additional group/world permissions.
+            if os.name != "nt" and target.suffix == ".sh":
+                target.chmod(target.stat().st_mode | 0o100)
     hook_dir = claude_home() / "hooks"
     hook_dir.mkdir(parents=True, exist_ok=True)
     for name in ("ccg_detect.py", "ccg_guard.py", "hook_request.py", "hook_sysinfo.py"):
