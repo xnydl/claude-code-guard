@@ -163,6 +163,23 @@ python3 scripts/test_skill.py
 
 账号残留扫描或清理必须有明确的应用、账号和 profile 范围授权。先读[清理边界](references/identity-purge.md)，不要把“更新工具”理解成“可以清空登录资料”。
 
+## 指纹浏览器：Fingerprint Chromium Guarded
+
+浏览器流程改用 Fingerprint Chromium Guarded，不再使用 Camoufox 登录。完整配置与检查清单见 [浏览器流程](references/fingerprint.md)。
+
+- GUI 从受保护应用启动；CLI 的 `BROWSER` 指向 Chromium 分发入口，不能裸开内置 Chromium 或回退系统浏览器。
+- 浏览器和 CLI 复用指定节点策略；验证实际公网 IP，再用同一 IP 的离线 GeoIP 同步 IANA 时区与定位。保留独立 profile 和固定 seed，不迁移 Cookie、密码或其他账号资料。
+- 仅专用 Chromium 实例关闭内置 DoH、本地解析和非代理 UDP/QUIC；失败关闭该实例。浏览器 profile 的单实例锁不应限制多个 Claude CLI。
+- 分发器不是完整浏览器安装器：macOS 需先部署受管应用、GeoIP 和私有定位管道；Windows/Linux 未适配时明确阻断。旧 Camoufox 文件名只做兼容跳转，旧资料和离线 GeoIP 依赖不自动删除。
+
+## Clash DNS：接管后也通过指定代理解析
+
+只开 TUN/fake-ip 或在网卡填写 `1.1.1.1`，不代表最终 DNS 已经走代理。可使用 [Clash DNS 配置与验收](references/dns.md) 中的订阅扩展模板，让普通域名的 DoH 连接经过现有指定叶子；直连网站的 DNS 也使用同一路径，网站本身仍保留规则分流。
+
+模板不会改节点绑定、沙箱、系统网卡 DNS 或浏览器资料；更新 Skill 也不会自动部署。节点入口域名保留独立加密引导解析，不能递归使用尚未建立的代理。代理不可用时普通域名解析失败，不回退国内/明文 DNS。远程解析可能影响国内 CDN/速度，部署前说明取舍。
+
+此能力不是系统级 kill switch：应用自带 DoH、旁路、TUN 关闭/客户端退出和真实 CLI 请求仍需分别验证。普通 Chrome 检测异常不能直接证明 CLI 也泄漏；检测页空结果或不同国家的递归 DNS 也不是安全/泄漏的充分证据。此更新仅提供 Clash/Mihomo 配置。
+
 ## 常见问题排查
 
 ### 远端数据库被拦，本地数据库正常
@@ -193,6 +210,9 @@ python3 scripts/test_skill.py
 - [ ] 启用主备时，只有一主一备，Selector 真实叶子、`active_role` 和 `expected_node` 一致，且切换/回滚/备用失效路径已验证。
 - [ ] Claude/Anthropic 走 `HTTP_PROXY` → gate → 专用入口。
 - [ ] shell、脚本、git、数据库未被错误送进专用入口。
+- [ ] 沙箱保留普通出站放行和控制 socket 拒绝，未恢复旧的全网出站阻断。
+- [ ] 浏览器已切换到受保护 Chromium；节点/IP、固定 profile/seed、时区定位和失败关闭分别验证。
+- [ ] 使用代理 DNS 时核对 UDP/TCP 接管、实际 DoH 连接链及引导解析例外，浏览器与 CLI 分开验收。
 - [ ] 错误节点、错误地区、控制器失联和入口断开会拒绝相应操作。
 - [ ] `python3 scripts/test_skill.py` 通过；未测试的网络能力明确标记为未验证。
 

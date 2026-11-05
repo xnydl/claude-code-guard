@@ -1,7 +1,7 @@
 ---
 name: claude-code-guard
 description: >
-  配置、维护或排查 Claude Code 本地网络保护：Claude/Anthropic 的 HTTP(S) 走专用入站与固定出口；默认单节点，也可显式配置一个主节点和一个备用节点做 fail-closed 自动故障切换；shell、脚本、远端数据库不拦。核对 wrapper、Clash/Mihomo 专用入站、链式代理、动态住宅 IP、网络 Hook、macOS 沙箱与 Camoufox。也用于明确授权的账号残留扫描或清理。用户提到 claude-code-guard、Claude 防封、远端库被拦截、Seatbelt EPERM、代理断连阻断、节点漂移或主备切换时使用；不能保证不封号、绝对不泄漏或不同账号无法关联。
+  配置、维护或排查 Clash/Mihomo 下的 Claude Code 网络保护：Claude/Anthropic HTTP(S) 走专用入站与固定出口，默认单节点，可按明确授权启用固定主备；shell、脚本、远端数据库不拦。核对 wrapper、节点/链式代理、网络 Hook、macOS 沙箱，以及 Fingerprint Chromium Guarded 的 IP、时区、定位和代理 DNS。用户提到 Claude 防封、Seatbelt EPERM、节点漂移、DNS 泄漏或受保护指纹浏览器时使用；不保证不封号、绝对无泄漏或账号无法关联。
 ---
 
 # Claude Code 网络保护 Skill
@@ -37,16 +37,19 @@ HTTP CONNECT 默认真 Claude 走专用入站。用户**当场授权**的公司/
 - 固定节点不等于固定公网 IP。同一指定节点的新 TW 动态 IP 可更新 CLI 会话；其他任何叶子均不应放行。未启用主备时，换出口必须由用户明确重新指定并替换旧目标。启用主备时，只能从主切到预先指定的备用，不能临时追加第三节点。节点名、旗帜、显示延迟都不是地区证据。
 - 短时重试只能使用当前 `expected_node`，不能回退 DIRECT、系统代理或未指定节点。已有新鲜严格验证时，单次有界的控制口超时、trace 超时或 Anthropic 临时不可达可保留上一条已验证路由并立即复核，连续达阈值才关门；叶子漂移、地区不符、TUN/IPv6 或主备状态不一致仍立即拒绝。主节点连续失败达到阈值后，切换过程必须先置 `switching=true` 并关闭活动隧道，严格验证备用节点的实际路由、地区和 Anthropic 可达性后才能放行。失败必须读回确认回滚；无法确认时保持 `blocked`。默认不自动回切主节点。
 
-分层、重试和验收读 [保护边界](references/layers.md)；浏览器读 [Camoufox](references/fingerprint.md)。
+分层、重试和验收读 [保护边界](references/layers.md)。涉及浏览器新装、维护、登录入口、节点/IP、时区定位或 DNS/WebRTC 时，必须读 [Fingerprint Chromium Guarded](references/fingerprint.md)，以 Chromium 流程为准，不再部署或启动 Camoufox 浏览器。
 
-## 本机已确认偏好
+系统/普通浏览器/CLI 的 DNS 排查与代理解析部署，另读 [Clash 代理 DNS](references/dns.md)。区分接管、上游传输和节点引导解析；浏览器检测通过不能代替 CLI 验证。此版本的 DNS 适配仅针对 Clash/Mihomo，不新增其他 VPN 后端。
 
-以下不是其他客户的新装默认值：
+## 已有部署的维护约束
 
-- 保留规则分流、任一时刻唯一生效出口、动态 IP 兼容和会话恢复；本机已按用户指定启用固定主备，不扩展成节点池。
-- 本机明确选择默认 --permission-mode bypassPermissions；显式参数优先。它放宽工具权限，不增强网络保护；新装不擅自开启。
+以下须按目标机器的实际选择核对，不是其他客户的新装默认值：
+
+- 保留规则分流、任一时刻唯一生效出口、动态 IP 兼容和会话恢复；只有用户已明确选择时才保留固定主备，不扩展成节点池。
+- 保留用户已明确选择的权限模式；若使用 --permission-mode bypassPermissions，显式参数优先。它放宽工具权限，不增强网络保护；新装不擅自开启。
 - **不要设置 CLAUDE_CODE_DISABLE_MOUSE**。鼠标转义码先排查 TTY/raw mode、退出清理及后台进程读写终端，不用禁用鼠标掩盖问题。
-- 用 Claude 进程 BROWSER 指向 claude-camoufox；不改 macOS 全局默认浏览器，不碰普通 Chrome 的任一 profile。
+- 用 Claude 进程 BROWSER 指向 claude-fingerprint-chromium，由受保护的 Fingerprint Chromium Guarded 应用接收登录地址；不裸开其内置 Chromium，不退回 Camoufox/普通 Chrome，不改系统默认浏览器。
+- 保留 Chromium 独立 profile 与 device.json 的固定 seed，不导入其他浏览器 Cookie、密码或登录资料。浏览器钉住启动时验证的公网 IP；同叶子 IP 变化须阻断后重开以同步 GeoIP，不照搬 CLI 的动态 IP 更新行为。
 - 不因更新 CLI/Skill 自动清凭证、聊天、Cookie 或重置指纹；读 [清理边界](references/identity-purge.md)。
 
 ## 新环境或迁移
@@ -64,6 +67,7 @@ HTTP CONNECT 默认真 Claude 走专用入站。用户**当场授权**的公司/
 - 语法/单测 → 比较文件 → 只读路由核对 → 无账号的独立拒绝路径测试。
 - 用户允许影响连接后才能切节点、关 TUN 或断网测试；不打断正在运行的任务。
 - 测试错误节点、错误地区、控制器失联、上游断开、IPv6/DNS、备用 loopback 代理及长连接；启用主备时还要测试切换屏障、备用探测失败、回滚失败、活动隧道关闭和不会自动回切；没测的写“未验证”。
+- DNS 分别验证 UDP/TCP 接管、加密上游的实际连接链、普通浏览器与 CLI，以及节点引导例外。TYPE64（SVCB）/TYPE65（HTTPS）仅为辅助校验，不自动屏蔽；空 Answer 不证明无泄漏。全系统断路防护需单独授权和验收。
 - --fast 不证明地区；Hook 存在不证明每条 HTTP 请求被检查；启动器路径不证明当前进程受沙箱限制。
 - 更新 CLI 只更新真实二进制，保留 wrapper/Hook/设置/服务。用前后摘要证明保护文件未改；没有前置摘要就不能宣称“哈希证明未改”。
 - 更新 Skill 后运行 scripts/test_skill.py。用户明确要求发布到 GitHub 时才提交并推送该仓库。

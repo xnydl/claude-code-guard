@@ -66,7 +66,15 @@ python3 claude-code-guard/scripts/ccg_install.py \
 
 这个安装器只输出专用 listener 的配置建议，不自动合并 Mihomo 配置或完成服务部署；不能仅凭脚本退出成功就登录。没有选定节点、入口未配置或检查未通过时，不进行登录。
 
-## 4. 账号资料只按授权清理
+## 4. 浏览器统一使用 Fingerprint Chromium Guarded
+
+按 [浏览器配置及检查清单](references/fingerprint.md) 准备独立 profile、固定 seed、专用代理、出口 IP/GeoIP、时区定位及 DNS/WebRTC 防护。CLI 的 BROWSER 使用 Chromium 入口，不再调用 Camoufox。
+
+`ccg_install.py` 仅把新模板的 BROWSER 指向 `fingerprint-chromium.sh/.ps1`；它不下载或安装受保护浏览器，也不替代定位覆盖和断路保护。macOS 分发器要求已验收的 `~/Applications/Fingerprint Chromium Guarded.app`；其他安装位置须现场适配。Windows/Linux 未部署等效入口时明确阻断，不转用默认 Chrome/Edge。
+
+维护已有机器时不运行该安装器或改运行配置；只更新 Skill 不自动重启浏览器、移动 Cookie、重建 seed 或卸载旧离线 GeoIP 依赖。配置过程及未测试能力需分别记录。
+
+## 5. 账号资料只按授权清理
 
 更新 Skill、升级 CLI 或曾被封号都不自动授权删除。先读 `references/identity-purge.md`，确认具体应用、账号和 profile 范围，只报告存在性/数量，不显示凭证或正文。
 
